@@ -421,3 +421,4 @@ def run_bot():
 def stop_bot():
     global running
     running = False
+add bybit demo mode
