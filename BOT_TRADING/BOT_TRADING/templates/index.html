@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BOT PRO</title>
+
+<link rel="manifest" href="/static/manifest.json">
+<meta name="theme-color" content="#00ff9d">
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+
+body {
+    background: #020617;
+    color: white;
+    font-family: Arial;
+    text-align: center;
+}
+
+/* HEADER */
+h1 {
+    margin: 15px;
+    font-size: 26px;
+}
+
+/* CARD */
+.card {
+    background: #0f172a;
+    border-radius: 16px;
+    padding: 15px;
+    margin: 10px auto;
+    width: 280px;
+    box-shadow: 0 0 20px rgba(0,255,150,0.05);
+}
+
+/* STATUS */
+.on {
+    color: #00ff9d;
+    text-shadow: 0 0 10px #00ff9d;
+}
+
+.off {
+    color: #ff3b3b;
+    text-shadow: 0 0 10px #ff3b3b;
+}
+
+/* BUTTONS */
+.btn {
+    width: 140px;
+    padding: 14px;
+    margin: 8px;
+    border: none;
+    border-radius: 12px;
+    font-size: 15px;
+    cursor: pointer;
+}
+
+.start {
+    background: #00ff9d;
+    color: black;
+}
+
+.stop {
+    background: #ff3b3b;
+}
+
+/* VALUE */
+.value {
+    font-size: 20px;
+    font-weight: bold;
+}
+
+.green { color: #00ff9d; }
+.red { color: #ff3b3b; }
+
+/* SWITCH */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 55px;
+  height: 30px;
+}
+
+.switch input { display:none }
+
+.slider {
+  position: absolute;
+  background-color: #333;
+  border-radius: 34px;
+  top: 0; left: 0; right: 0; bottom: 0;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 22px; width: 22px;
+  left: 4px; bottom: 4px;
+  background: white;
+  border-radius: 50%;
+  transition: .3s;
+}
+
+input:checked + .slider {
+  background-color: #00ff9d;
+}
+
+input:checked + .slider:before {
+  transform: translateX(24px);
+}
+
+input[type=range] {
+    width: 200px;
+}
+
+.log {
+    max-height: 120px;
+    overflow-y: auto;
+    font-size: 11px;
+    text-align: left;
+}
+
+</style>
+</head>
+
+<body>
+
+<h1>BOT PRO</h1>
+
+<div>
+    <button class="btn start" onclick="fetch('/start')">START</button>
+    <button class="btn stop" onclick="fetch('/stop')">STOP</button>
+</div>
+
+<div class="card">
+    <h3 id="status" class="off">OFF</h3>
+    <p>Signal: <b id="signal">NONE</b></p>
+</div>
+
+<div class="card">
+    <p>Balance</p>
+    <div id="balance" class="value">0</div>
+</div>
+
+<div class="card">
+    <p>Profit</p>
+    <div id="profit" class="value">0</div>
+</div>
+
+<div class="card">
+    <canvas id="chart"></canvas>
+</div>
+
+<div class="card">
+    <h3>AI</h3>
+    <label class="switch">
+        <input type="checkbox" id="ai" onchange="saveSettings()" checked>
+        <span class="slider"></span>
+    </label>
+
+    <h3>Risk</h3>
+    <input type="range" min="0.5" max="3" step="0.5" value="1" id="risk" oninput="saveSettings()">
+    <p id="riskValue">1%</p>
+</div>
+
+<div class="card log" id="log"></div>
+
+<script>
+
+let chart = new Chart(document.getElementById("chart"), {
+    type: 'line',
+    data: { labels: [], datasets: [{ data: [], borderColor: '#00ff9d' }] },
+    options: { plugins:{legend:{display:false}}, scales:{x:{display:false},y:{display:false}} }
+});
+
+function saveSettings(){
+    let r = document.getElementById("risk").value;
+    document.getElementById("riskValue").innerText = r + "%";
+
+    fetch('/settings',{
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify({
+            risk:r,
+            max_trades:2,
+            ai:document.getElementById("ai").checked
+        })
+    });
+}
+
+function update(){
+
+    fetch('/data')
+    .then(r=>r.json())
+    .then(d=>{
+
+        let status = document.getElementById("status");
+
+        status.innerText = d.status;
+        status.className = d.status === "ON" ? "on" : "off";
+
+        document.getElementById("signal").innerText = d.signal;
+        document.getElementById("balance").innerText = Number(d.balance || 0).toFixed(2);
+
+        let p = document.getElementById("profit");
+        p.innerText = Number(d.profit || 0).toFixed(2);
+        p.className = "value " + (d.profit >= 0 ? "green" : "red");
+
+        if(d.settings){
+            document.getElementById("ai").checked = d.settings.ai === true;
+            document.getElementById("risk").value = d.settings.risk;
+            document.getElementById("riskValue").innerText = d.settings.risk + "%";
+        }
+
+        if(d.equity && d.equity.length){
+            chart.data.labels = d.equity.map((_,i)=>i);
+            chart.data.datasets[0].data = d.equity;
+            chart.update();
+        }
+
+        if(d.logs){
+            document.getElementById("log").innerHTML = d.logs.join("<br>");
+        }
+
+    });
+}
+
+setInterval(update, 2000);
+
+// PWA
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/static/sw.js');
+}
+
+</script>
+
+</body>
+</html>
