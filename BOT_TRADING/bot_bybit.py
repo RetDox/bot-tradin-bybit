@@ -52,11 +52,13 @@ def get_session():
     if not api_key or not api_secret:
         raise RuntimeError("Missing BYBIT_API_KEY or BYBIT_API_SECRET")
 
-    session = HTTP(
-        testnet=env_bool("BYBIT_TESTNET", True),
-        api_key=api_key,
-        api_secret=api_secret,
-    )
+session = HTTP(
+    testnet=env_bool("BYBIT_TESTNET", True),
+    demo=env_bool("BYBIT_DEMO", False),
+    api_key=api_key,
+    api_secret=api_secret,
+)
+
     return session
 
 
@@ -379,9 +381,11 @@ def run_bot():
         return
 
     log(
-        "BYBIT BOT STARTED "
-        f"testnet={env_bool('BYBIT_TESTNET', True)} dry_run={is_dry_run()}"
-    )
+    "BYBIT BOT STARTED "
+    f"testnet={env_bool('BYBIT_TESTNET', True)} "
+    f"demo={env_bool('BYBIT_DEMO', False)} "
+    f"dry_run={is_dry_run()}"
+)
     running = True
 
     try:
@@ -417,3 +421,4 @@ def run_bot():
 def stop_bot():
     global running
     running = False
+add bybit demo flag
