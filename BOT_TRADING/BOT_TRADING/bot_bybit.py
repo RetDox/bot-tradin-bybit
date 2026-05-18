@@ -1,6 +1,8 @@
 import os
 import time
+from datetime import datetime
 from decimal import Decimal, ROUND_DOWN
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 
@@ -31,6 +33,17 @@ session = None
 instrument_cache = {}
 forced_test_done = False
 order_cooldowns = {}
+tracked_positions = {}
+notified_closed_keys = set()
+daily_stats = {
+    "date": None,
+    "start_balance": None,
+    "realized_pnl": 0.0,
+    "closed_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "summary_sent": False,
+}
 
 
 def env_bool(name, default):
@@ -105,6 +118,51 @@ def get_order_cooldown_seconds():
         return int(os.getenv("BYBIT_ORDER_COOLDOWN_SECONDS", "300"))
     except ValueError:
         return 300
+
+
+def get_float_env(name, default):
+    try:
+        return float(os.getenv(name, str(default)))
+    except ValueError:
+        return default
+
+
+def get_be_trigger_atr():
+    return get_float_env("BYBIT_BE_TRIGGER_ATR", 0.6)
+
+
+def get_be_lock_atr():
+    return get_float_env("BYBIT_BE_LOCK_ATR", 0.1)
+
+
+def local_now():
+    timezone_name = os.getenv("DAILY_SUMMARY_TZ", "Europe/Rome")
+    try:
+        return datetime.now(ZoneInfo(timezone_name))
+    except Exception:
+        return datetime.now(ZoneInfo("Europe/Rome"))
+
+
+def get_daily_summary_time():
+    try:
+        hour = int(os.getenv("DAILY_SUMMARY_HOUR", "23"))
+        minute = int(os.getenv("DAILY_SUMMARY_MINUTE", "59"))
+    except ValueError:
+        hour = 23
+        minute = 59
+
+    return max(0, min(hour, 23)), max(0, min(minute, 59))
+
+
+def safe_float(value, default=0.0):
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def format_money(value):
+    return f"{value:.2f} {get_quote_coin()}"
 
 
 def api_ok(response):
@@ -317,6 +375,149 @@ def get_positions(symbol=None):
     return [item for item in positions if abs(float(item.get("size") or 0)) > 0]
 
 
+def get_latest_closed_pnl(symbol):
+    try:
+        response = get_session().get_closed_pnl(
+            category=get_category(),
+            symbol=symbol,
+            limit=1,
+        )
+    except Exception as exc:
+        log(f"CLOSED PNL ERROR {symbol}: {type(exc).__name__}: {exc}")
+        return None
+
+    if not api_ok(response):
+        log(f"CLOSED PNL FAILED {symbol}: {response}")
+        return None
+
+    rows = response.get("result", {}).get("list", [])
+    return rows[0] if rows else None
+
+
+def closed_pnl_key(symbol, closed_pnl):
+    return "|".join(
+        [
+            symbol,
+            str(closed_pnl.get("orderId") or ""),
+            str(closed_pnl.get("updatedTime") or closed_pnl.get("createdTime") or ""),
+            str(closed_pnl.get("closedPnl") or ""),
+        ]
+    )
+
+
+def ensure_daily_stats():
+    today = local_now().date().isoformat()
+
+    if daily_stats["date"] == today:
+        return
+
+    daily_stats.update(
+        {
+            "date": today,
+            "start_balance": balance,
+            "realized_pnl": 0.0,
+            "closed_trades": 0,
+            "wins": 0,
+            "losses": 0,
+            "summary_sent": False,
+        }
+    )
+
+
+def record_closed_trade(pnl):
+    ensure_daily_stats()
+    daily_stats["realized_pnl"] += pnl
+    daily_stats["closed_trades"] += 1
+
+    if pnl > 0:
+        daily_stats["wins"] += 1
+    else:
+        daily_stats["losses"] += 1
+
+
+def notify_position_closed(symbol, previous_position):
+    closed_pnl = get_latest_closed_pnl(symbol)
+
+    if closed_pnl is None:
+        log(f"{symbol} closed, waiting for closed PnL data")
+        return
+
+    key = closed_pnl_key(symbol, closed_pnl)
+    if key in notified_closed_keys:
+        return
+
+    notified_closed_keys.add(key)
+
+    pnl = safe_float(closed_pnl.get("closedPnl"))
+    side = closed_pnl.get("side") or previous_position.get("side", "UNKNOWN")
+    qty = closed_pnl.get("qty") or previous_position.get("size", "?")
+    entry = closed_pnl.get("avgEntryPrice") or previous_position.get("avgPrice", "?")
+    exit_price = closed_pnl.get("avgExitPrice") or "?"
+    result = "PROFITTO" if pnl > 0 else "PERDITA" if pnl < 0 else "PAREGGIO"
+
+    record_closed_trade(pnl)
+    notify(
+        "BOT PRO - posizione chiusa\n"
+        f"Exchange: Bybit {'Demo' if is_demo_mode() else 'Live'}\n"
+        f"Simbolo: {symbol}\n"
+        f"Direzione: {side}\n"
+        f"Quantita: {qty}\n"
+        f"Entrata: {entry}\n"
+        f"Uscita: {exit_price}\n"
+        f"Risultato: {result}\n"
+        f"PnL: {format_money(pnl)}"
+    )
+
+
+def monitor_position_lifecycle():
+    current_positions = {}
+
+    for symbol in get_symbols():
+        positions = get_positions(symbol)
+        if positions:
+            current_positions[symbol] = positions[0]
+
+    for symbol, previous in list(tracked_positions.items()):
+        if symbol not in current_positions:
+            notify_position_closed(symbol, previous)
+
+    tracked_positions.clear()
+    tracked_positions.update(current_positions)
+
+
+def maybe_send_daily_summary():
+    ensure_daily_stats()
+
+    if daily_stats["summary_sent"]:
+        return
+
+    now = local_now()
+    hour, minute = get_daily_summary_time()
+    if (now.hour, now.minute) < (hour, minute):
+        return
+
+    realized = daily_stats["realized_pnl"]
+    open_pnl = profit
+    total = realized + open_pnl
+    start_balance = daily_stats["start_balance"] or balance
+    balance_change = balance - start_balance
+    result = "profittevole" if total > 0 else "in perdita" if total < 0 else "in pareggio"
+
+    notify(
+        "BOT PRO - riepilogo giornaliero\n"
+        f"Data: {daily_stats['date']}\n"
+        f"Esito: giornata {result}\n"
+        f"Trade chiusi: {daily_stats['closed_trades']}\n"
+        f"Vinti/Persi: {daily_stats['wins']}/{daily_stats['losses']}\n"
+        f"PnL realizzato: {format_money(realized)}\n"
+        f"PnL aperto: {format_money(open_pnl)}\n"
+        f"PnL totale: {format_money(total)}\n"
+        f"Variazione balance: {format_money(balance_change)}\n"
+        f"Balance: {format_money(balance)}"
+    )
+    daily_stats["summary_sent"] = True
+
+
 def get_open_position_symbols():
     symbols = set()
     for symbol in get_symbols():
@@ -408,11 +609,11 @@ def open_trade(df, signal):
     if api_ok(response):
         log(f"{symbol} {signal} OPENED qty={qty} sl={sl_text} tp={tp_text}")
         notify(
-            "BOT PRO position opened\n"
+            "BOT PRO - posizione aperta\n"
             f"Exchange: Bybit {'Demo' if is_demo_mode() else 'Live'}\n"
-            f"Symbol: {symbol}\n"
-            f"Side: {signal}\n"
-            f"Qty: {qty}\n"
+            f"Simbolo: {symbol}\n"
+            f"Direzione: {'ACQUISTO' if signal == 'BUY' else 'VENDITA'}\n"
+            f"Quantita: {qty}\n"
             f"SL: {sl_text}\n"
             f"TP: {tp_text}"
         )
@@ -481,7 +682,9 @@ def manage_trailing():
                 elif atr_gain >= 2:
                     new_sl = entry + (atr * 0.8)
                 elif atr_gain >= 1:
-                    new_sl = entry
+                    new_sl = entry + (atr * get_be_lock_atr())
+                elif atr_gain >= get_be_trigger_atr():
+                    new_sl = entry + (atr * get_be_lock_atr())
 
                 if new_sl is None or (current_sl > 0 and current_sl >= new_sl):
                     continue
@@ -495,7 +698,9 @@ def manage_trailing():
                 elif atr_gain >= 2:
                     new_sl = entry - (atr * 0.8)
                 elif atr_gain >= 1:
-                    new_sl = entry
+                    new_sl = entry - (atr * get_be_lock_atr())
+                elif atr_gain >= get_be_trigger_atr():
+                    new_sl = entry - (atr * get_be_lock_atr())
 
                 if new_sl is None or (current_sl > 0 and current_sl <= new_sl):
                     continue
@@ -544,10 +749,13 @@ def run_bot():
         while running:
             try:
                 refresh_account()
+                ensure_daily_stats()
                 equity_history.append(balance + profit)
                 equity_history = equity_history[-100:]
 
                 manage_trailing()
+                monitor_position_lifecycle()
+                maybe_send_daily_summary()
                 maybe_force_demo_order()
 
                 for symbol in get_symbols():
@@ -559,12 +767,12 @@ def run_bot():
                         last_signal = "AI OFF"
                         continue
 
-                signal, reason = get_signal(df)
-                last_signal = f"{symbol} {signal or 'NONE'}"
-                log(f"{symbol} -> {signal or 'NONE'} ({get_strategy_mode()}: {reason})")
+                    signal, reason = get_signal(df)
+                    last_signal = f"{symbol} {signal or 'NONE'}"
+                    log(f"{symbol} -> {signal or 'NONE'} ({get_strategy_mode()}: {reason})")
 
-                if signal:
-                    open_trade(df, signal)
+                    if signal:
+                        open_trade(df, signal)
             except Exception as exc:
                 log(f"BYBIT LOOP ERROR: {type(exc).__name__}: {exc}")
 
