@@ -6,6 +6,7 @@ import pandas as pd
 
 from ai_model import ai_signal, calculate_rsi
 from config import *
+from notifier import notify
 from utils import log
 
 try:
@@ -370,6 +371,15 @@ def open_trade(df, signal):
 
     if api_ok(response):
         log(f"{symbol} {signal} OPENED qty={qty} sl={sl_text} tp={tp_text}")
+                notify(
+            "BOT PRO position opened\n"
+            f"Exchange: Bybit {'Demo' if is_demo_mode() else 'Live'}\n"
+            f"Symbol: {symbol}\n"
+            f"Side: {signal}\n"
+            f"Qty: {qty}\n"
+            f"SL: {sl_text}\n"
+            f"TP: {tp_text}"
+        )
     else:
         log(f"ORDER FAILED {symbol} {signal}: {response}")
 
