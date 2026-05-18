@@ -371,7 +371,7 @@ def open_trade(df, signal):
 
     if api_ok(response):
         log(f"{symbol} {signal} OPENED qty={qty} sl={sl_text} tp={tp_text}")
-                notify(
+        notify(
             "BOT PRO position opened\n"
             f"Exchange: Bybit {'Demo' if is_demo_mode() else 'Live'}\n"
             f"Symbol: {symbol}\n"
