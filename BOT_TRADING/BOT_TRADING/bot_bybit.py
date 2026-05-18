@@ -4,7 +4,7 @@ from decimal import Decimal, ROUND_DOWN
 
 import pandas as pd
 
-from ai_model import ai_signal
+from ai_model import ai_signal, calculate_rsi
 from config import *
 from utils import log
 
@@ -28,6 +28,7 @@ settings = {
 
 session = None
 instrument_cache = {}
+forced_test_done = False
 
 
 def env_bool(name, default):
@@ -78,6 +79,23 @@ def get_quote_coin():
 
 def is_dry_run():
     return env_bool("BYBIT_DRY_RUN", True)
+
+
+def is_demo_mode():
+    return env_bool("BYBIT_DEMO", False)
+
+
+def should_force_demo_order():
+    return env_bool("BYBIT_FORCE_DEMO_ORDER", False)
+
+
+def get_force_side():
+    side = os.getenv("BYBIT_FORCE_SIDE", "BUY").upper()
+    return side if side in ("BUY", "SELL") else "BUY"
+
+
+def get_strategy_mode():
+    return os.getenv("BYBIT_STRATEGY_MODE", "strict").lower()
 
 
 def api_ok(response):
@@ -178,6 +196,64 @@ def compute_atr(df, period=14):
         axis=1,
     ).max(axis=1)
     return true_range.rolling(period).mean().iloc[-1]
+
+
+def relaxed_signal(df):
+    if df is None or len(df) < 60:
+        return None, "not enough data"
+
+    data = df.copy()
+    data["ema_fast"] = data["close"].ewm(span=9).mean()
+    data["ema_slow"] = data["close"].ewm(span=21).mean()
+    data["rsi"] = calculate_rsi(data["close"], RSI_PERIOD)
+    data["range"] = data["high"] - data["low"]
+
+    atr_current = data["range"].rolling(14).mean().iloc[-1]
+    atr_average = data["range"].rolling(50).mean().iloc[-1]
+
+    if pd.isna(atr_current) or pd.isna(atr_average) or atr_current <= 0 or atr_average <= 0:
+        return None, "invalid atr"
+
+    if atr_current < (atr_average * 0.25):
+        return None, "very low volatility"
+
+    last = data.iloc[-1]
+    prev = data.iloc[-2]
+
+    close = last["close"]
+    prev_close = prev["close"]
+    ema_fast = last["ema_fast"]
+    ema_slow = last["ema_slow"]
+    rsi = last["rsi"]
+
+    if pd.isna(rsi):
+        return None, "invalid rsi"
+
+    trend_up = ema_fast > ema_slow and close > ema_fast
+    trend_down = ema_fast < ema_slow and close < ema_fast
+    momentum_up = close > prev_close
+    momentum_down = close < prev_close
+
+    if trend_up and momentum_up and 42 <= rsi <= 72:
+        return "BUY", f"trend up rsi={round(rsi, 1)}"
+
+    if trend_down and momentum_down and 28 <= rsi <= 58:
+        return "SELL", f"trend down rsi={round(rsi, 1)}"
+
+    return None, (
+        f"trend_up={trend_up} trend_down={trend_down} "
+        f"rsi={round(rsi, 1)} atr={round(atr_current, 3)}"
+    )
+
+
+def get_signal(df):
+    mode = get_strategy_mode()
+
+    if mode == "relaxed":
+        return relaxed_signal(df)
+
+    signal = ai_signal(df, use_news_filter=True, verbose=False)
+    return signal, "strict strategy"
 
 
 def refresh_account():
@@ -298,6 +374,35 @@ def open_trade(df, signal):
         log(f"ORDER FAILED {symbol} {signal}: {response}")
 
 
+def maybe_force_demo_order():
+    global forced_test_done
+
+    if forced_test_done or not should_force_demo_order():
+        return
+
+    if not is_demo_mode() or is_dry_run():
+        log("FORCE ORDER SKIPPED: requires BYBIT_DEMO=true and BYBIT_DRY_RUN=false")
+        forced_test_done = True
+        return
+
+    symbols = get_symbols()
+    if not symbols:
+        log("FORCE ORDER SKIPPED: no symbols configured")
+        forced_test_done = True
+        return
+
+    symbol = symbols[0]
+    df = get_data(symbol)
+    if df is None:
+        log(f"FORCE ORDER SKIPPED: no data for {symbol}")
+        return
+
+    side = get_force_side()
+    log(f"FORCE DEMO ORDER {symbol} {side}")
+    open_trade(df, side)
+    forced_test_done = True
+
+
 def manage_trailing():
     for symbol in get_symbols():
         df = get_data(symbol)
@@ -371,7 +476,7 @@ def manage_trailing():
 
 
 def run_bot():
-    global equity_history, last_signal, running
+    global equity_history, forced_test_done, last_signal, running
 
     try:
         get_session()
@@ -382,10 +487,11 @@ def run_bot():
     log(
         "BYBIT BOT STARTED "
         f"testnet={env_bool('BYBIT_TESTNET', True)} "
-        f"demo={env_bool('BYBIT_DEMO', False)} "
+        f"demo={is_demo_mode()} "
         f"dry_run={is_dry_run()}"
     )
     running = True
+    forced_test_done = False
 
     try:
         while running:
@@ -395,6 +501,7 @@ def run_bot():
                 equity_history = equity_history[-100:]
 
                 manage_trailing()
+                maybe_force_demo_order()
 
                 for symbol in get_symbols():
                     df = get_data(symbol)
@@ -405,12 +512,12 @@ def run_bot():
                         last_signal = "AI OFF"
                         continue
 
-                    signal = ai_signal(df, use_news_filter=True, verbose=False)
-                    last_signal = f"{symbol} {signal or 'NONE'}"
-                    log(f"{symbol} -> {signal or 'NONE'}")
+                signal, reason = get_signal(df)
+                last_signal = f"{symbol} {signal or 'NONE'}"
+                log(f"{symbol} -> {signal or 'NONE'} ({get_strategy_mode()}: {reason})")
 
-                    if signal:
-                        open_trade(df, signal)
+                if signal:
+                    open_trade(df, signal)
             except Exception as exc:
                 log(f"BYBIT LOOP ERROR: {type(exc).__name__}: {exc}")
 
