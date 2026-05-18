@@ -30,6 +30,7 @@ settings = {
 session = None
 instrument_cache = {}
 forced_test_done = False
+order_cooldowns = {}
 
 
 def env_bool(name, default):
@@ -99,6 +100,13 @@ def get_strategy_mode():
     return os.getenv("BYBIT_STRATEGY_MODE", "strict").lower()
 
 
+def get_order_cooldown_seconds():
+    try:
+        return int(os.getenv("BYBIT_ORDER_COOLDOWN_SECONDS", "300"))
+    except ValueError:
+        return 300
+
+
 def api_ok(response):
     return isinstance(response, dict) and response.get("retCode") == 0
 
@@ -122,7 +130,9 @@ def get_instrument(symbol):
     meta = {
         "qty_step": Decimal(str(lot_filter.get("qtyStep", "0.001"))),
         "min_qty": Decimal(str(lot_filter.get("minOrderQty", "0.001"))),
-        "max_qty": Decimal(str(lot_filter.get("maxOrderQty", "1000000"))),
+        "max_qty": Decimal(
+            str(lot_filter.get("maxMktOrderQty") or lot_filter.get("maxOrderQty", "1000000"))
+        ),
         "tick_size": Decimal(str(price_filter.get("tickSize", "0.01"))),
     }
     instrument_cache[symbol] = meta
@@ -151,8 +161,25 @@ def normalize_price(symbol, price):
 def normalize_qty(symbol, qty):
     meta = get_instrument(symbol)
     value = quantize_down(qty, meta["qty_step"])
-    value = max(meta["min_qty"], min(value, meta["max_qty"]))
+
+    max_qty = meta["max_qty"]
+    env_max_qty = os.getenv("BYBIT_MAX_QTY")
+    if env_max_qty:
+        max_qty = min(max_qty, Decimal(str(env_max_qty)))
+
+    value = max(meta["min_qty"], min(value, max_qty))
     return fmt_decimal(value)
+
+
+def in_order_cooldown(symbol):
+    last_attempt = order_cooldowns.get(symbol)
+    if last_attempt is None:
+        return False
+    return (time.time() - last_attempt) < get_order_cooldown_seconds()
+
+
+def start_order_cooldown(symbol):
+    order_cooldowns[symbol] = time.time()
 
 
 def get_data(symbol):
@@ -319,6 +346,10 @@ def open_trade(df, signal):
     symbol = df["symbol"].iloc[-1]
     last_signal = f"{symbol} {signal}"
 
+    if in_order_cooldown(symbol):
+        log(f"{symbol} order cooldown active")
+        return
+
     open_symbols = get_open_position_symbols()
     if symbol in open_symbols:
         log(f"{symbol} already open")
@@ -356,18 +387,23 @@ def open_trade(df, signal):
         log(f"DRY RUN {symbol} {signal} qty={qty} sl={sl_text} tp={tp_text}")
         return
 
-    response = get_session().place_order(
-        category=get_category(),
-        symbol=symbol,
-        side=side,
-        orderType="Market",
-        qty=qty,
-        takeProfit=tp_text,
-        stopLoss=sl_text,
-        tpslMode="Full",
-        positionIdx=0,
-        orderLinkId=f"botpro-{int(time.time() * 1000)}",
-    )
+    try:
+        response = get_session().place_order(
+            category=get_category(),
+            symbol=symbol,
+            side=side,
+            orderType="Market",
+            qty=qty,
+            takeProfit=tp_text,
+            stopLoss=sl_text,
+            tpslMode="Full",
+            positionIdx=0,
+            orderLinkId=f"botpro-{int(time.time() * 1000)}",
+        )
+    except Exception as exc:
+        log(f"ORDER ERROR {symbol} {signal} qty={qty}: {type(exc).__name__}: {exc}")
+        start_order_cooldown(symbol)
+        return
 
     if api_ok(response):
         log(f"{symbol} {signal} OPENED qty={qty} sl={sl_text} tp={tp_text}")
@@ -382,6 +418,7 @@ def open_trade(df, signal):
         )
     else:
         log(f"ORDER FAILED {symbol} {signal}: {response}")
+        start_order_cooldown(symbol)
 
 
 def maybe_force_demo_order():
