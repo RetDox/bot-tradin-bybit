@@ -35,6 +35,8 @@ forced_test_done = False
 order_cooldowns = {}
 tracked_positions = {}
 notified_closed_keys = set()
+last_telegram_update_id = None
+risk_pause_until = 0
 daily_stats = {
     "date": None,
     "start_balance": None,
@@ -42,6 +44,7 @@ daily_stats = {
     "closed_trades": 0,
     "wins": 0,
     "losses": 0,
+    "consecutive_losses": 0,
     "summary_sent": False,
 }
 
@@ -133,6 +136,21 @@ def get_be_trigger_atr():
 
 def get_be_lock_atr():
     return get_float_env("BYBIT_BE_LOCK_ATR", 0.1)
+
+
+def get_daily_max_loss_pct():
+    return get_float_env("BYBIT_DAILY_MAX_LOSS_PCT", 1.5)
+
+
+def get_max_consecutive_losses():
+    try:
+        return int(os.getenv("BYBIT_MAX_CONSECUTIVE_LOSSES", "2"))
+    except ValueError:
+        return 2
+
+
+def get_loss_cooldown_seconds():
+    return int(get_float_env("BYBIT_LOSS_COOLDOWN_MINUTES", 60) * 60)
 
 
 def local_now():
@@ -419,20 +437,52 @@ def ensure_daily_stats():
             "closed_trades": 0,
             "wins": 0,
             "losses": 0,
+            "consecutive_losses": 0,
             "summary_sent": False,
         }
     )
 
 
 def record_closed_trade(pnl):
+    global risk_pause_until
+
     ensure_daily_stats()
     daily_stats["realized_pnl"] += pnl
     daily_stats["closed_trades"] += 1
 
     if pnl > 0:
         daily_stats["wins"] += 1
+        daily_stats["consecutive_losses"] = 0
     else:
         daily_stats["losses"] += 1
+        daily_stats["consecutive_losses"] += 1
+        risk_pause_until = max(risk_pause_until, time.time() + get_loss_cooldown_seconds())
+
+    if daily_stats["consecutive_losses"] >= get_max_consecutive_losses():
+        risk_pause_until = max(risk_pause_until, time.time() + get_loss_cooldown_seconds())
+
+
+def trading_block_reason():
+    ensure_daily_stats()
+
+    if risk_pause_until and time.time() < risk_pause_until:
+        minutes_left = int((risk_pause_until - time.time()) / 60) + 1
+        return f"pausa rischio attiva ancora {minutes_left} min"
+
+    start_balance = daily_stats["start_balance"] or balance
+    max_loss = start_balance * (get_daily_max_loss_pct() / 100)
+    daily_total = daily_stats["realized_pnl"] + profit
+
+    if max_loss > 0 and daily_total <= -max_loss:
+        return (
+            f"limite perdita giornaliera raggiunto "
+            f"({format_money(daily_total)} <= -{format_money(max_loss)})"
+        )
+
+    if daily_stats["consecutive_losses"] >= get_max_consecutive_losses():
+        return "troppe perdite consecutive"
+
+    return None
 
 
 def notify_position_closed(symbol, previous_position):
@@ -496,26 +546,51 @@ def maybe_send_daily_summary():
     if (now.hour, now.minute) < (hour, minute):
         return
 
+    notify(build_report_message("BOT PRO - riepilogo giornaliero"))
+    daily_stats["summary_sent"] = True
+
+
+def get_open_positions_text():
+    lines = []
+
+    for symbol in get_symbols():
+        for position in get_positions(symbol):
+            side = position.get("side", "?")
+            size = position.get("size", "?")
+            avg_price = position.get("avgPrice", "?")
+            pnl = safe_float(position.get("unrealisedPnl"))
+            lines.append(f"{symbol} {side} qty={size} entry={avg_price} PnL={format_money(pnl)}")
+
+    return "\n".join(lines) if lines else "Nessuna posizione aperta"
+
+
+def build_report_message(title="BOT PRO - report richiesto"):
+    ensure_daily_stats()
+
     realized = daily_stats["realized_pnl"]
     open_pnl = profit
     total = realized + open_pnl
     start_balance = daily_stats["start_balance"] or balance
     balance_change = balance - start_balance
     result = "profittevole" if total > 0 else "in perdita" if total < 0 else "in pareggio"
+    block_reason = trading_block_reason() or "nessun blocco"
 
-    notify(
-        "BOT PRO - riepilogo giornaliero\n"
+    return (
+        f"{title}\n"
         f"Data: {daily_stats['date']}\n"
         f"Esito: giornata {result}\n"
         f"Trade chiusi: {daily_stats['closed_trades']}\n"
         f"Vinti/Persi: {daily_stats['wins']}/{daily_stats['losses']}\n"
+        f"Perdite consecutive: {daily_stats['consecutive_losses']}\n"
         f"PnL realizzato: {format_money(realized)}\n"
         f"PnL aperto: {format_money(open_pnl)}\n"
         f"PnL totale: {format_money(total)}\n"
         f"Variazione balance: {format_money(balance_change)}\n"
-        f"Balance: {format_money(balance)}"
+        f"Balance: {format_money(balance)}\n"
+        f"Ultimo segnale: {last_signal}\n"
+        f"Blocco rischio: {block_reason}\n"
+        f"Posizioni:\n{get_open_positions_text()}"
     )
-    daily_stats["summary_sent"] = True
 
 
 def get_open_position_symbols():
@@ -524,6 +599,66 @@ def get_open_position_symbols():
         for position in get_positions(symbol):
             symbols.add(position.get("symbol"))
     return symbols
+
+
+def get_telegram_updates():
+    token = os.getenv("TELEGRAM_BOT_TOKEN")
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+
+    if not token or not chat_id:
+        return []
+
+    try:
+        import requests
+
+        params = {"timeout": 0}
+        if last_telegram_update_id is not None:
+            params["offset"] = last_telegram_update_id + 1
+
+        response = requests.get(
+            f"https://api.telegram.org/bot{token}/getUpdates",
+            params=params,
+            timeout=8,
+        )
+
+        if not response.ok:
+            log(f"TELEGRAM UPDATES FAILED: {response.status_code} {response.text}")
+            return []
+
+        return response.json().get("result", [])
+    except Exception as exc:
+        log(f"TELEGRAM UPDATES ERROR: {type(exc).__name__}: {exc}")
+        return []
+
+
+def process_telegram_commands():
+    global last_telegram_update_id
+
+    chat_id = os.getenv("TELEGRAM_CHAT_ID")
+    if not chat_id:
+        return
+
+    for update in get_telegram_updates():
+        update_id = update.get("update_id")
+        if update_id is not None:
+            last_telegram_update_id = update_id
+
+        message = update.get("message") or update.get("edited_message") or {}
+        text = (message.get("text") or "").strip().lower()
+        message_chat_id = str((message.get("chat") or {}).get("id"))
+
+        if message_chat_id != str(chat_id):
+            continue
+
+        if text in ("/report", "report", "resoconto", "/resoconto", "/status", "status"):
+            notify(build_report_message("BOT PRO - report richiesto"))
+        elif text in ("/help", "help", "aiuto"):
+            notify(
+                "Comandi BOT PRO\n"
+                "/report - report della giornata\n"
+                "/status - stato bot e posizioni\n"
+                "/help - lista comandi"
+            )
 
 
 def calculate_qty(symbol, entry, stop_loss):
@@ -546,6 +681,11 @@ def open_trade(df, signal):
 
     symbol = df["symbol"].iloc[-1]
     last_signal = f"{symbol} {signal}"
+
+    block_reason = trading_block_reason()
+    if block_reason:
+        log(f"{symbol} trade blocked: {block_reason}")
+        return
 
     if in_order_cooldown(symbol):
         log(f"{symbol} order cooldown active")
@@ -756,6 +896,7 @@ def run_bot():
                 manage_trailing()
                 monitor_position_lifecycle()
                 maybe_send_daily_summary()
+                process_telegram_commands()
                 maybe_force_demo_order()
 
                 for symbol in get_symbols():
