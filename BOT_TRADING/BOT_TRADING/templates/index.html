@@ -9,6 +9,7 @@
 <meta name="theme-color" content="#0b0d0f">
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://unpkg.com/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
 <script src="https://unpkg.com/lucide@latest"></script>
 
 <style>
@@ -42,7 +43,8 @@ body {
 }
 
 button,
-input {
+input,
+select {
     font: inherit;
 }
 
@@ -98,6 +100,26 @@ input {
     gap: 10px;
 }
 
+.view-select,
+.control-select {
+    height: 42px;
+    min-width: 168px;
+    padding: 0 38px 0 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #0d1014;
+    color: var(--text);
+    cursor: pointer;
+}
+
+.view-section {
+    display: none;
+}
+
+.view-section.active {
+    display: grid;
+}
+
 .btn {
     display: inline-flex;
     align-items: center;
@@ -106,8 +128,9 @@ input {
     min-width: 118px;
     height: 42px;
     padding: 0 16px;
-    border: 1px solid transparent;
+    border: 1px solid var(--border);
     border-radius: 8px;
+    background: var(--panel-soft);
     color: var(--text);
     cursor: pointer;
     transition: transform .16s ease, border-color .16s ease, background .16s ease;
@@ -132,6 +155,11 @@ input {
 .grid {
     display: grid;
     grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.75fr);
+    gap: 14px;
+}
+
+.single-view {
+    grid-template-columns: 1fr;
     gap: 14px;
 }
 
@@ -236,6 +264,76 @@ input {
     overflow-wrap: anywhere;
 }
 
+.report-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+    padding: 0 14px 14px;
+}
+
+.report-card {
+    min-height: 170px;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background:
+        linear-gradient(145deg, rgba(82, 213, 255, 0.08), transparent 46%),
+        var(--panel-soft);
+}
+
+.report-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.report-head h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0;
+    font-size: 14px;
+}
+
+.report-period {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.report-total {
+    font-size: clamp(24px, 4vw, 34px);
+    font-weight: 900;
+    line-height: 1;
+}
+
+.report-stats {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 8px;
+    margin-top: 15px;
+}
+
+.report-stat {
+    padding: 9px;
+    border: 1px solid rgba(43, 49, 56, 0.8);
+    border-radius: 8px;
+    background: rgba(7, 8, 11, 0.35);
+}
+
+.report-stat span {
+    display: block;
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.report-stat strong {
+    display: block;
+    margin-top: 5px;
+    font-size: 14px;
+}
+
 .positive { color: var(--green); }
 .negative { color: var(--red); }
 .neutral { color: var(--text); }
@@ -243,6 +341,31 @@ input {
 .chart-wrap {
     height: 330px;
     padding: 12px 14px 16px;
+}
+
+.candle-toolbar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px;
+    padding: 14px;
+    border-bottom: 1px solid var(--border);
+}
+
+.chart-shell {
+    height: min(62vh, 560px);
+    min-height: 360px;
+    padding: 8px 10px 14px;
+}
+
+#candleChart {
+    width: 100%;
+    height: 100%;
+}
+
+.hint {
+    color: var(--muted);
+    font-size: 12px;
 }
 
 .side {
@@ -369,6 +492,44 @@ input[type="range"] {
     color: #d7dde3;
 }
 
+.logs.tall {
+    height: min(66vh, 620px);
+}
+
+.tool-grid {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 14px;
+}
+
+.tool-card {
+    min-height: 150px;
+    padding: 16px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel-soft);
+}
+
+.tool-card h3 {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 12px;
+    font-size: 15px;
+}
+
+.tool-card p,
+.tool-card li {
+    color: var(--muted);
+    font-size: 13px;
+    line-height: 1.45;
+}
+
+.tool-card ul {
+    margin: 0;
+    padding-left: 18px;
+}
+
 .log-line {
     display: grid;
     grid-template-columns: 82px minmax(0, 1fr);
@@ -399,11 +560,21 @@ input[type="range"] {
         flex: 1;
     }
 
+    .view-select {
+        width: 100%;
+    }
+
     .grid {
         grid-template-columns: 1fr;
     }
 
-    .metrics {
+    .metrics,
+    .report-grid,
+    .tool-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .report-stats {
         grid-template-columns: 1fr;
     }
 }
@@ -442,6 +613,12 @@ input[type="range"] {
             </div>
         </div>
         <div class="actions">
+            <select class="view-select" id="viewSelect" onchange="switchView(this.value)" title="Cambia vista">
+                <option value="overview">Overview</option>
+                <option value="candles">Grafici a candela</option>
+                <option value="tools">Strumenti utili</option>
+                <option value="logs">Log completi</option>
+            </select>
             <button class="btn btn-start" onclick="startBot()" title="Avvia bot">
                 <i data-lucide="play"></i>
                 <span>START</span>
@@ -453,7 +630,7 @@ input[type="range"] {
         </div>
     </header>
 
-    <section class="grid">
+    <section class="grid view-section active" id="overviewView">
         <div class="panel">
             <div class="panel-header">
                 <h2 class="panel-title"><i data-lucide="gauge"></i>Overview</h2>
@@ -478,6 +655,54 @@ input[type="range"] {
                     <div class="metric-label"><i data-lucide="radio"></i>Signal</div>
                     <div id="signalMain" class="metric-value neutral">NONE</div>
                     <div id="lastUpdate" class="metric-note">Ultimo update: -</div>
+                </div>
+            </div>
+
+            <div class="report-grid">
+                <div class="report-card">
+                    <div class="report-head">
+                        <h3><i data-lucide="calendar-days"></i>Resoconto giornaliero</h3>
+                        <span class="report-period" id="dailyPeriod">-</span>
+                    </div>
+                    <div id="dailyTotal" class="report-total neutral">0.00</div>
+                    <div id="dailyResult" class="metric-note">Giornata in pareggio</div>
+                    <div class="report-stats">
+                        <div class="report-stat">
+                            <span>Trade</span>
+                            <strong id="dailyTrades">0</strong>
+                        </div>
+                        <div class="report-stat">
+                            <span>Vinti/Persi</span>
+                            <strong id="dailyWinLoss">0/0</strong>
+                        </div>
+                        <div class="report-stat">
+                            <span>Win rate</span>
+                            <strong id="dailyWinRate">0%</strong>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="report-card">
+                    <div class="report-head">
+                        <h3><i data-lucide="calendar-range"></i>Resoconto mensile</h3>
+                        <span class="report-period" id="monthlyPeriod">-</span>
+                    </div>
+                    <div id="monthlyTotal" class="report-total neutral">0.00</div>
+                    <div id="monthlyResult" class="metric-note">Mese in pareggio</div>
+                    <div class="report-stats">
+                        <div class="report-stat">
+                            <span>Trade</span>
+                            <strong id="monthlyTrades">0</strong>
+                        </div>
+                        <div class="report-stat">
+                            <span>Vinti/Persi</span>
+                            <strong id="monthlyWinLoss">0/0</strong>
+                        </div>
+                        <div class="report-stat">
+                            <span>Win rate</span>
+                            <strong id="monthlyWinRate">0%</strong>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -553,6 +778,65 @@ input[type="range"] {
             <div class="logs" id="log"></div>
         </div>
     </section>
+
+    <section class="single-view view-section" id="candlesView">
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title"><i data-lucide="candlestick-chart"></i>Grafici a candela</h2>
+                <span class="hint" id="candleStatus">In attesa dati</span>
+            </div>
+            <div class="candle-toolbar">
+                <select class="control-select" id="candleSymbol" onchange="loadCandles()">
+                    <option value="XAUUSDT">XAUUSDT</option>
+                    <option value="BTCUSDT">BTCUSDT</option>
+                </select>
+                <select class="control-select" id="candleInterval" onchange="loadCandles()">
+                    <option value="1">1 minuto</option>
+                    <option value="5" selected>5 minuti</option>
+                    <option value="15">15 minuti</option>
+                    <option value="60">1 ora</option>
+                </select>
+                <button class="btn" onclick="loadCandles()" title="Aggiorna grafico">
+                    <i data-lucide="refresh-cw"></i>
+                    <span>Aggiorna</span>
+                </button>
+            </div>
+            <div class="chart-shell">
+                <div id="candleChart"></div>
+            </div>
+        </div>
+    </section>
+
+    <section class="single-view view-section" id="toolsView">
+        <div class="tool-grid">
+            <div class="tool-card">
+                <h3><i data-lucide="send"></i>Telegram</h3>
+                <p>Puoi scrivere <strong>/status</strong> per vedere lo stato del bot e <strong>/report</strong> per chiedere il report della giornata quando vuoi. In dashboard vedi anche il mensile.</p>
+            </div>
+            <div class="tool-card">
+                <h3><i data-lucide="shield"></i>Controlli rischio</h3>
+                <ul>
+                    <li>Controlla il rischio dal cursore in dashboard.</li>
+                    <li>Tieni basso il max qty se il broker rifiuta ordini grandi.</li>
+                    <li>Demo attiva se vedi <strong>demo=True</strong> nei log.</li>
+                </ul>
+            </div>
+            <div class="tool-card">
+                <h3><i data-lucide="target"></i>Mercati</h3>
+                <p>La dashboard segue XAUUSDT e BTCUSDT. Usa la vista candele per controllare trend, volatilita e ultimi movimenti prima di lasciare il bot acceso.</p>
+            </div>
+        </div>
+    </section>
+
+    <section class="single-view view-section" id="logsView">
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title"><i data-lucide="terminal"></i>Log completi</h2>
+                <span class="status-pill"><span id="logCountFull">0</span> righe</span>
+            </div>
+            <div class="logs tall" id="logFull"></div>
+        </div>
+    </section>
 </main>
 
 <script>
@@ -562,6 +846,9 @@ const money = new Intl.NumberFormat('it-IT', {
 });
 
 let isApplyingSettings = false;
+let candleChart = null;
+let candleSeries = null;
+let lastCandleKey = "";
 
 let chart = new Chart(document.getElementById("chart"), {
     type: "line",
@@ -610,6 +897,29 @@ function stopBot(){
     fetch("/stop").then(update);
 }
 
+function switchView(view){
+    document.querySelectorAll(".view-section").forEach(section => {
+        section.classList.remove("active");
+    });
+
+    const target = document.getElementById(view + "View");
+    if (target) target.classList.add("active");
+
+    if (view === "candles") {
+        initCandles();
+        loadCandles();
+    }
+
+    setTimeout(() => {
+        if (candleChart && view === "candles") {
+            candleChart.resize(
+                document.getElementById("candleChart").clientWidth,
+                document.getElementById("candleChart").clientHeight
+            );
+        }
+    }, 50);
+}
+
 function saveSettings(){
     if (isApplyingSettings) return;
 
@@ -644,6 +954,37 @@ function setProfit(value){
     document.getElementById("profitNote").innerText = profit >= 0 ? "PnL aperto positivo" : "PnL aperto negativo";
 }
 
+function toneClass(value){
+    const number = Number(value || 0);
+    return number > 0 ? "positive" : number < 0 ? "negative" : "neutral";
+}
+
+function renderReport(prefix, report, fallbackLabel){
+    if (!report) return;
+
+    const total = Number(report.total_pnl || 0);
+    const realized = Number(report.realized_pnl || 0);
+    const openPnl = Number(report.open_pnl || 0);
+    const result = report.result || "in pareggio";
+    const resultLabel = fallbackLabel + " " + result + " | Realizzato " + money.format(realized) + " | Aperto " + money.format(openPnl);
+
+    const totalNode = document.getElementById(prefix + "Total");
+    totalNode.innerText = money.format(total);
+    totalNode.className = "report-total " + toneClass(total);
+
+    document.getElementById(prefix + "Period").innerText = report.period || "-";
+    document.getElementById(prefix + "Result").innerText = resultLabel;
+    document.getElementById(prefix + "Trades").innerText = report.closed_trades || 0;
+    document.getElementById(prefix + "WinLoss").innerText = (report.wins || 0) + "/" + (report.losses || 0);
+    document.getElementById(prefix + "WinRate").innerText = (report.win_rate || 0) + "%";
+}
+
+function renderReports(reports){
+    reports = reports || {};
+    renderReport("daily", reports.daily, "Giornata");
+    renderReport("monthly", reports.monthly, "Mese");
+}
+
 function applySettings(settings){
     if (!settings) return;
 
@@ -656,38 +997,49 @@ function applySettings(settings){
 }
 
 function renderLogs(logs){
-    const container = document.getElementById("log");
-    container.textContent = "";
+    const containers = [
+        document.getElementById("log"),
+        document.getElementById("logFull")
+    ].filter(Boolean);
 
     const items = Array.isArray(logs) ? logs.slice(-80) : [];
     document.getElementById("logCount").innerText = items.length;
+    const fullCount = document.getElementById("logCountFull");
+    if (fullCount) fullCount.innerText = items.length;
 
     if (!items.length) {
-        const empty = document.createElement("div");
-        empty.className = "empty-log";
-        empty.textContent = "Nessun log disponibile";
-        container.appendChild(empty);
+        for (const container of containers) {
+            container.textContent = "";
+            const empty = document.createElement("div");
+            empty.className = "empty-log";
+            empty.textContent = "Nessun log disponibile";
+            container.appendChild(empty);
+        }
         return;
     }
 
     const now = new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-    for (const item of items) {
-        const row = document.createElement("div");
-        row.className = "log-line";
+    for (const container of containers) {
+        container.textContent = "";
 
-        const time = document.createElement("span");
-        time.className = "log-time";
-        time.textContent = now;
+        for (const item of items) {
+            const row = document.createElement("div");
+            row.className = "log-line";
 
-        const msg = document.createElement("span");
-        msg.textContent = item;
+            const time = document.createElement("span");
+            time.className = "log-time";
+            time.textContent = now;
 
-        row.appendChild(time);
-        row.appendChild(msg);
-        container.appendChild(row);
+            const msg = document.createElement("span");
+            msg.textContent = item;
+
+            row.appendChild(time);
+            row.appendChild(msg);
+            container.appendChild(row);
+        }
+
+        container.scrollTop = container.scrollHeight;
     }
-
-    container.scrollTop = container.scrollHeight;
 }
 
 function updateChart(equity){
@@ -699,6 +1051,72 @@ function updateChart(equity){
     chart.data.labels = points.map((_, i) => i + 1);
     chart.data.datasets[0].data = points;
     chart.update();
+}
+
+function initCandles(){
+    if (candleChart || !window.LightweightCharts) return;
+
+    const chartNode = document.getElementById("candleChart");
+    candleChart = LightweightCharts.createChart(chartNode, {
+        layout: {
+            background: { color: "#111418" },
+            textColor: "#d7dde3"
+        },
+        grid: {
+            vertLines: { color: "rgba(154, 164, 173, 0.08)" },
+            horzLines: { color: "rgba(154, 164, 173, 0.10)" }
+        },
+        rightPriceScale: {
+            borderColor: "rgba(154, 164, 173, 0.18)"
+        },
+        timeScale: {
+            borderColor: "rgba(154, 164, 173, 0.18)",
+            timeVisible: true,
+            secondsVisible: false
+        },
+        crosshair: {
+            mode: LightweightCharts.CrosshairMode.Normal
+        }
+    });
+
+    candleSeries = candleChart.addCandlestickSeries({
+        upColor: "#00e68a",
+        downColor: "#ff4d57",
+        borderUpColor: "#00e68a",
+        borderDownColor: "#ff4d57",
+        wickUpColor: "#00e68a",
+        wickDownColor: "#ff4d57"
+    });
+}
+
+function loadCandles(){
+    initCandles();
+    if (!candleSeries) return;
+
+    const symbol = document.getElementById("candleSymbol").value;
+    const interval = document.getElementById("candleInterval").value;
+    const key = symbol + ":" + interval;
+    const status = document.getElementById("candleStatus");
+
+    status.textContent = "Carico " + symbol + " M" + interval + "...";
+
+    fetch(`/candles?symbol=${encodeURIComponent(symbol)}&interval=${encodeURIComponent(interval)}&limit=180`)
+    .then(response => response.json().then(payload => ({ ok: response.ok, payload })))
+    .then(({ ok, payload }) => {
+        if (!ok || payload.error) {
+            status.textContent = payload.error || "Errore caricamento candele";
+            return;
+        }
+
+        const candles = (payload.candles || []).filter(item => item.time > 0);
+        candleSeries.setData(candles);
+        candleChart.timeScale().fitContent();
+        status.textContent = candles.length + " candele caricate su " + payload.symbol;
+        lastCandleKey = key;
+    })
+    .catch(() => {
+        status.textContent = "Candele non disponibili ora";
+    });
 }
 
 function update(){
@@ -721,6 +1139,14 @@ function update(){
         applySettings(data.settings);
         updateChart(data.equity);
         renderLogs(data.logs);
+        renderReports(data.reports);
+
+        if (document.getElementById("candlesView").classList.contains("active")) {
+            const symbol = document.getElementById("candleSymbol").value;
+            const interval = document.getElementById("candleInterval").value;
+            const key = symbol + ":" + interval;
+            if (key !== lastCandleKey) loadCandles();
+        }
 
         if (window.lucide) lucide.createIcons();
     })
@@ -737,9 +1163,13 @@ if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("/static/sw.js");
 }
 
+window.addEventListener("resize", () => {
+    if (!candleChart) return;
+    const node = document.getElementById("candleChart");
+    candleChart.resize(node.clientWidth, node.clientHeight);
+});
+
 if (window.lucide) lucide.createIcons();
 </script>
 </body>
-</html>
-
 </html>
