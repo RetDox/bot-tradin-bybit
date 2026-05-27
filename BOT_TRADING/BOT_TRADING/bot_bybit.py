@@ -1,4 +1,3 @@
-import os
 import time
 from datetime import datetime
 from decimal import Decimal, ROUND_DOWN
@@ -33,6 +32,7 @@ session = None
 instrument_cache = {}
 forced_test_done = False
 order_cooldowns = {}
+last_trade_bar = {}
 tracked_positions = {}
 notified_closed_keys = set()
 last_telegram_update_id = None
@@ -115,6 +115,10 @@ def get_strategy_mode():
     return os.getenv("BYBIT_STRATEGY_MODE", "strict").lower()
 
 
+def get_confirm_interval():
+    return os.getenv("BYBIT_CONFIRM_INTERVAL", "15")
+
+
 def get_order_cooldown_seconds():
     try:
         return int(os.getenv("BYBIT_ORDER_COOLDOWN_SECONDS", "300"))
@@ -135,6 +139,18 @@ def get_be_trigger_atr():
 
 def get_be_lock_atr():
     return get_float_env("BYBIT_BE_LOCK_ATR", 0.1)
+
+
+def get_bybit_sl_atr():
+    return get_float_env("BYBIT_SL_ATR", ATR_SL_MULTIPLIER)
+
+
+def get_bybit_tp_atr():
+    return get_float_env("BYBIT_TP_ATR", ATR_TP_MULTIPLIER)
+
+
+def get_min_adx():
+    return get_float_env("BYBIT_MIN_ADX", 18)
 
 
 def local_now():
@@ -242,12 +258,12 @@ def start_order_cooldown(symbol):
     order_cooldowns[symbol] = time.time()
 
 
-def get_data(symbol):
+def get_data(symbol, interval=None, limit=100):
     response = get_session().get_kline(
         category=get_category(),
         symbol=symbol,
-        interval=os.getenv("BYBIT_INTERVAL", BYBIT_INTERVAL),
-        limit=100,
+        interval=interval or os.getenv("BYBIT_INTERVAL", BYBIT_INTERVAL),
+        limit=limit,
     )
 
     if not api_ok(response):
@@ -284,6 +300,66 @@ def compute_atr(df, period=14):
         axis=1,
     ).max(axis=1)
     return true_range.rolling(period).mean().iloc[-1]
+
+
+def calculate_adx(df, period=14):
+    if df is None or len(df) < period * 2 + 5:
+        return None
+
+    up = df["high"].diff()
+    down = -df["low"].diff()
+    plus_dm = ((up > down) & (up > 0)) * up
+    minus_dm = ((down > up) & (down > 0)) * down
+
+    prev_close = df["close"].shift(1)
+    true_range = pd.concat(
+        [
+            df["high"] - df["low"],
+            (df["high"] - prev_close).abs(),
+            (df["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+
+    tr_sum = true_range.rolling(period).sum()
+    plus_di = 100 * (plus_dm.rolling(period).sum() / tr_sum)
+    minus_di = 100 * (minus_dm.rolling(period).sum() / tr_sum)
+    dx = (abs(plus_di - minus_di) / (plus_di + minus_di)) * 100
+    adx = dx.rolling(period).mean().iloc[-1]
+
+    if pd.isna(adx):
+        return None
+
+    return float(adx)
+
+
+def candle_body_ratio(candle):
+    full = candle["high"] - candle["low"]
+    if full <= 0:
+        return 0
+    return abs(candle["close"] - candle["open"]) / full
+
+
+def htf_trend(symbol):
+    htf = get_data(symbol, interval=get_confirm_interval(), limit=160)
+    if htf is None or len(htf) < 80:
+        return None, "no htf data"
+
+    htf = htf.copy()
+    htf["ema_fast"] = htf["close"].ewm(span=21).mean()
+    htf["ema_slow"] = htf["close"].ewm(span=55).mean()
+
+    last = htf.iloc[-1]
+    prev = htf.iloc[-5]
+    slope = last["ema_fast"] - prev["ema_fast"]
+
+    if last["ema_fast"] > last["ema_slow"] and slope > 0:
+        return "BUY", "htf trend up"
+
+    if last["ema_fast"] < last["ema_slow"] and slope < 0:
+        return "SELL", "htf trend down"
+
+    return None, "htf flat"
 
 
 def relaxed_signal(df):
@@ -334,11 +410,94 @@ def relaxed_signal(df):
     )
 
 
+def quality_signal(df):
+    if df is None or len(df) < 80:
+        return None, "not enough data"
+
+    symbol = df["symbol"].iloc[-1]
+    confirm_side, confirm_reason = htf_trend(symbol)
+
+    if confirm_side is None:
+        return None, confirm_reason
+
+    data = df.copy()
+    data["ema_fast"] = data["close"].ewm(span=21).mean()
+    data["ema_slow"] = data["close"].ewm(span=55).mean()
+    data["rsi"] = calculate_rsi(data["close"], RSI_PERIOD)
+    data["range"] = data["high"] - data["low"]
+
+    atr_current = data["range"].rolling(14).mean().iloc[-1]
+    atr_average = data["range"].rolling(50).mean().iloc[-1]
+    adx = calculate_adx(data)
+
+    if (
+        pd.isna(atr_current)
+        or pd.isna(atr_average)
+        or atr_current <= 0
+        or atr_average <= 0
+        or adx is None
+    ):
+        return None, "invalid indicators"
+
+    if adx < get_min_adx():
+        return None, f"adx too low {round(adx, 1)}"
+
+    if atr_current < atr_average * 0.45:
+        return None, "low volatility"
+
+    if atr_current > atr_average * 2.4:
+        return None, "volatility spike"
+
+    last = data.iloc[-1]
+    prev = data.iloc[-2]
+    rsi = last["rsi"]
+    body_ratio = candle_body_ratio(last)
+
+    if pd.isna(rsi):
+        return None, "invalid rsi"
+
+    local_buy = (
+        confirm_side == "BUY"
+        and last["ema_fast"] > last["ema_slow"]
+        and last["close"] > last["ema_fast"]
+        and prev["low"] <= prev["ema_fast"]
+        and last["close"] > prev["high"]
+        and last["close"] > last["open"]
+        and body_ratio >= 0.35
+        and 46 <= rsi <= 66
+    )
+
+    if local_buy:
+        return "BUY", f"{confirm_reason} pullback breakout rsi={round(rsi, 1)} adx={round(adx, 1)}"
+
+    local_sell = (
+        confirm_side == "SELL"
+        and last["ema_fast"] < last["ema_slow"]
+        and last["close"] < last["ema_fast"]
+        and prev["high"] >= prev["ema_fast"]
+        and last["close"] < prev["low"]
+        and last["close"] < last["open"]
+        and body_ratio >= 0.35
+        and 34 <= rsi <= 54
+    )
+
+    if local_sell:
+        return "SELL", f"{confirm_reason} pullback breakout rsi={round(rsi, 1)} adx={round(adx, 1)}"
+
+    return None, (
+        f"{confirm_reason} no setup rsi={round(rsi, 1)} "
+        f"adx={round(adx, 1)} body={round(body_ratio, 2)}"
+    )
+
+
 def get_signal(df):
     mode = get_strategy_mode()
 
     if mode == "relaxed":
         return relaxed_signal(df)
+
+    if mode == "quality":
+        return quality_signal(df)
 
     signal = ai_signal(df, use_news_filter=True, verbose=False)
     return signal, "strict strategy"
@@ -634,6 +793,11 @@ def open_trade(df, signal):
 
     symbol = df["symbol"].iloc[-1]
     last_signal = f"{symbol} {signal}"
+    bar_time = str(df["time"].iloc[-1])
+
+    if last_trade_bar.get(symbol) == bar_time:
+        log(f"{symbol} already traded this candle")
+        return
 
     if in_order_cooldown(symbol):
         log(f"{symbol} order cooldown active")
@@ -661,12 +825,12 @@ def open_trade(df, signal):
 
     if signal == "BUY":
         side = "Buy"
-        sl = last_price - (atr * ATR_SL_MULTIPLIER)
-        tp = last_price + (atr * ATR_TP_MULTIPLIER)
+        sl = last_price - (atr * get_bybit_sl_atr())
+        tp = last_price + (atr * get_bybit_tp_atr())
     else:
         side = "Sell"
-        sl = last_price + (atr * ATR_SL_MULTIPLIER)
-        tp = last_price - (atr * ATR_TP_MULTIPLIER)
+        sl = last_price + (atr * get_bybit_sl_atr())
+        tp = last_price - (atr * get_bybit_tp_atr())
 
     qty = calculate_qty(symbol, last_price, sl)
     sl_text = normalize_price(symbol, sl)
@@ -695,6 +859,7 @@ def open_trade(df, signal):
         return
 
     if api_ok(response):
+        last_trade_bar[symbol] = bar_time
         log(f"{symbol} {signal} OPENED qty={qty} sl={sl_text} tp={tp_text}")
         notify(
             "BOT PRO - posizione aperta\n"
