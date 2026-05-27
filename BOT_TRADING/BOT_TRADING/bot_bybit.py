@@ -47,6 +47,14 @@ daily_stats = {
     "consecutive_losses": 0,
     "summary_sent": False,
 }
+monthly_stats = {
+    "month": None,
+    "start_balance": None,
+    "realized_pnl": 0.0,
+    "closed_trades": 0,
+    "wins": 0,
+    "losses": 0,
+}
 
 
 def env_bool(name, default):
@@ -587,17 +595,76 @@ def ensure_daily_stats():
     )
 
 
+def ensure_monthly_stats():
+    month = local_now().strftime("%Y-%m")
+
+    if monthly_stats["month"] == month:
+        return
+
+    monthly_stats.update(
+        {
+            "month": month,
+            "start_balance": balance,
+            "realized_pnl": 0.0,
+            "closed_trades": 0,
+            "wins": 0,
+            "losses": 0,
+        }
+    )
+
+
 def record_closed_trade(pnl):
     ensure_daily_stats()
+    ensure_monthly_stats()
     daily_stats["realized_pnl"] += pnl
     daily_stats["closed_trades"] += 1
+    monthly_stats["realized_pnl"] += pnl
+    monthly_stats["closed_trades"] += 1
 
     if pnl > 0:
         daily_stats["wins"] += 1
         daily_stats["consecutive_losses"] = 0
+        monthly_stats["wins"] += 1
     else:
         daily_stats["losses"] += 1
         daily_stats["consecutive_losses"] += 1
+        monthly_stats["losses"] += 1
+
+
+def stats_snapshot(stats, period_key):
+    realized = float(stats["realized_pnl"])
+    open_pnl = float(profit)
+    total = realized + open_pnl
+    trades = int(stats["closed_trades"])
+    wins = int(stats["wins"])
+    losses = int(stats["losses"])
+    start_balance = stats["start_balance"] or balance
+    win_rate = (wins / trades * 100) if trades else 0.0
+    result = "profittevole" if total > 0 else "in perdita" if total < 0 else "in pareggio"
+
+    return {
+        "period": stats[period_key],
+        "result": result,
+        "start_balance": float(start_balance or 0),
+        "balance": float(balance or 0),
+        "balance_change": float(balance - start_balance) if start_balance is not None else 0.0,
+        "realized_pnl": realized,
+        "open_pnl": open_pnl,
+        "total_pnl": total,
+        "closed_trades": trades,
+        "wins": wins,
+        "losses": losses,
+        "win_rate": round(win_rate, 1),
+    }
+
+
+def get_dashboard_reports():
+    ensure_daily_stats()
+    ensure_monthly_stats()
+    return {
+        "daily": stats_snapshot(daily_stats, "date"),
+        "monthly": stats_snapshot(monthly_stats, "month"),
+    }
 
 
 def notify_position_closed(symbol, previous_position):
