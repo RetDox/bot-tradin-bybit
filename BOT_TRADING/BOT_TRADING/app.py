@@ -30,6 +30,29 @@ def clamp_int(value, default, minimum, maximum):
     return max(minimum, min(number, maximum))
 
 
+def get_default_symbol():
+    symbols = os.getenv("BYBIT_SYMBOLS", "XAUUSDT")
+    return symbols.split(",")[0].strip().upper() or "XAUUSDT"
+
+
+def candle_time(value):
+    if hasattr(value, "timestamp"):
+        return int(value.timestamp())
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def get_dashboard_reports():
+    if hasattr(bot, "get_dashboard_reports"):
+        return bot.get_dashboard_reports()
+    return {
+        "daily": {},
+        "monthly": {},
+    }
+
+
 @app.route("/")
 def home():
     return render_template("index.html")
@@ -72,8 +95,45 @@ def data():
         "signal": bot.last_signal,
         "logs": logs,
         "settings": bot.settings,
-        "equity": bot.equity_history
+        "equity": bot.equity_history,
+        "reports": get_dashboard_reports(),
     })
+
+
+@app.route("/candles")
+def candles():
+    symbol = request.args.get("symbol", get_default_symbol()).strip().upper()
+    interval = request.args.get("interval", os.getenv("BYBIT_INTERVAL", "5")).strip()
+    limit = clamp_int(request.args.get("limit"), 160, 30, 500)
+
+    try:
+        try:
+            df = bot.get_data(symbol, interval=interval, limit=limit)
+        except TypeError:
+            df = bot.get_data(symbol)
+
+        candles_data = []
+        for _, row in df.tail(limit).iterrows():
+            candles_data.append({
+                "time": candle_time(row.get("time")),
+                "open": float(row.get("open")),
+                "high": float(row.get("high")),
+                "low": float(row.get("low")),
+                "close": float(row.get("close")),
+            })
+
+        return jsonify({
+            "symbol": symbol,
+            "interval": interval,
+            "candles": candles_data
+        })
+    except Exception as exc:
+        return jsonify({
+            "symbol": symbol,
+            "interval": interval,
+            "candles": [],
+            "error": f"{type(exc).__name__}: {exc}"
+        }), 500
 
 
 if __name__ == "__main__":
