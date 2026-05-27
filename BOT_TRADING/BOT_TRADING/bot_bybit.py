@@ -36,7 +36,6 @@ order_cooldowns = {}
 tracked_positions = {}
 notified_closed_keys = set()
 last_telegram_update_id = None
-risk_pause_until = 0
 daily_stats = {
     "date": None,
     "start_balance": None,
@@ -136,21 +135,6 @@ def get_be_trigger_atr():
 
 def get_be_lock_atr():
     return get_float_env("BYBIT_BE_LOCK_ATR", 0.1)
-
-
-def get_daily_max_loss_pct():
-    return get_float_env("BYBIT_DAILY_MAX_LOSS_PCT", 1.5)
-
-
-def get_max_consecutive_losses():
-    try:
-        return int(os.getenv("BYBIT_MAX_CONSECUTIVE_LOSSES", "2"))
-    except ValueError:
-        return 2
-
-
-def get_loss_cooldown_seconds():
-    return int(get_float_env("BYBIT_LOSS_COOLDOWN_MINUTES", 60) * 60)
 
 
 def local_now():
@@ -444,8 +428,6 @@ def ensure_daily_stats():
 
 
 def record_closed_trade(pnl):
-    global risk_pause_until
-
     ensure_daily_stats()
     daily_stats["realized_pnl"] += pnl
     daily_stats["closed_trades"] += 1
@@ -456,33 +438,6 @@ def record_closed_trade(pnl):
     else:
         daily_stats["losses"] += 1
         daily_stats["consecutive_losses"] += 1
-        risk_pause_until = max(risk_pause_until, time.time() + get_loss_cooldown_seconds())
-
-    if daily_stats["consecutive_losses"] >= get_max_consecutive_losses():
-        risk_pause_until = max(risk_pause_until, time.time() + get_loss_cooldown_seconds())
-
-
-def trading_block_reason():
-    ensure_daily_stats()
-
-    if risk_pause_until and time.time() < risk_pause_until:
-        minutes_left = int((risk_pause_until - time.time()) / 60) + 1
-        return f"pausa rischio attiva ancora {minutes_left} min"
-
-    start_balance = daily_stats["start_balance"] or balance
-    max_loss = start_balance * (get_daily_max_loss_pct() / 100)
-    daily_total = daily_stats["realized_pnl"] + profit
-
-    if max_loss > 0 and daily_total <= -max_loss:
-        return (
-            f"limite perdita giornaliera raggiunto "
-            f"({format_money(daily_total)} <= -{format_money(max_loss)})"
-        )
-
-    if daily_stats["consecutive_losses"] >= get_max_consecutive_losses():
-        return "troppe perdite consecutive"
-
-    return None
 
 
 def notify_position_closed(symbol, previous_position):
@@ -573,8 +528,6 @@ def build_report_message(title="BOT PRO - report richiesto"):
     start_balance = daily_stats["start_balance"] or balance
     balance_change = balance - start_balance
     result = "profittevole" if total > 0 else "in perdita" if total < 0 else "in pareggio"
-    block_reason = trading_block_reason() or "nessun blocco"
-
     return (
         f"{title}\n"
         f"Data: {daily_stats['date']}\n"
@@ -588,7 +541,7 @@ def build_report_message(title="BOT PRO - report richiesto"):
         f"Variazione balance: {format_money(balance_change)}\n"
         f"Balance: {format_money(balance)}\n"
         f"Ultimo segnale: {last_signal}\n"
-        f"Blocco rischio: {block_reason}\n"
+        f"Blocco trade: disattivato\n"
         f"Posizioni:\n{get_open_positions_text()}"
     )
 
@@ -681,11 +634,6 @@ def open_trade(df, signal):
 
     symbol = df["symbol"].iloc[-1]
     last_signal = f"{symbol} {signal}"
-
-    block_reason = trading_block_reason()
-    if block_reason:
-        log(f"{symbol} trade blocked: {block_reason}")
-        return
 
     if in_order_cooldown(symbol):
         log(f"{symbol} order cooldown active")
