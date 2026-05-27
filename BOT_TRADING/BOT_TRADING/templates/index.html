@@ -1,238 +1,745 @@
 <!DOCTYPE html>
-<html>
+<html lang="it">
 <head>
+<meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>BOT PRO</title>
 
 <link rel="manifest" href="/static/manifest.json">
-<meta name="theme-color" content="#00ff9d">
+<meta name="theme-color" content="#0b0d0f">
 
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
 
 <style>
+:root {
+    --bg: #07080b;
+    --panel: #111418;
+    --panel-soft: #171b20;
+    --border: #2b3138;
+    --text: #f5f7f8;
+    --muted: #9aa4ad;
+    --green: #00e68a;
+    --red: #ff4d57;
+    --amber: #f5b84b;
+    --cyan: #52d5ff;
+    --violet: #a78bfa;
+}
+
+* {
+    box-sizing: border-box;
+}
 
 body {
-    background: #020617;
-    color: white;
-    font-family: Arial;
-    text-align: center;
+    min-height: 100vh;
+    margin: 0;
+    background:
+        radial-gradient(circle at top left, rgba(0, 230, 138, 0.08), transparent 26rem),
+        radial-gradient(circle at bottom right, rgba(82, 213, 255, 0.07), transparent 28rem),
+        var(--bg);
+    color: var(--text);
+    font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
 }
 
-/* HEADER */
-h1 {
-    margin: 15px;
-    font-size: 26px;
+button,
+input {
+    font: inherit;
 }
 
-/* CARD */
-.card {
-    background: #0f172a;
-    border-radius: 16px;
-    padding: 15px;
-    margin: 10px auto;
-    width: 280px;
-    box-shadow: 0 0 20px rgba(0,255,150,0.05);
+.page {
+    width: min(1180px, calc(100% - 28px));
+    margin: 0 auto;
+    padding: 22px 0 34px;
 }
 
-/* STATUS */
-.on {
-    color: #00ff9d;
-    text-shadow: 0 0 10px #00ff9d;
+.topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    margin-bottom: 18px;
 }
 
-.off {
-    color: #ff3b3b;
-    text-shadow: 0 0 10px #ff3b3b;
+.brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
 }
 
-/* BUTTONS */
+.brand-mark {
+    display: grid;
+    width: 42px;
+    height: 42px;
+    place-items: center;
+    border: 1px solid rgba(0, 230, 138, 0.45);
+    border-radius: 8px;
+    background: linear-gradient(145deg, rgba(0, 230, 138, 0.18), rgba(82, 213, 255, 0.08));
+    color: var(--green);
+}
+
+.brand h1 {
+    margin: 0;
+    font-size: clamp(24px, 4vw, 38px);
+    line-height: 1;
+    letter-spacing: 0;
+}
+
+.brand p {
+    margin: 5px 0 0;
+    color: var(--muted);
+    font-size: 13px;
+}
+
+.actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    gap: 10px;
+}
+
 .btn {
-    width: 140px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-width: 118px;
+    height: 42px;
+    padding: 0 16px;
+    border: 1px solid transparent;
+    border-radius: 8px;
+    color: var(--text);
+    cursor: pointer;
+    transition: transform .16s ease, border-color .16s ease, background .16s ease;
+}
+
+.btn:hover {
+    transform: translateY(-1px);
+}
+
+.btn-start {
+    background: var(--green);
+    color: #04100a;
+    font-weight: 800;
+}
+
+.btn-stop {
+    background: rgba(255, 77, 87, 0.16);
+    border-color: rgba(255, 77, 87, 0.5);
+    color: #ffb8bd;
+}
+
+.grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1.45fr) minmax(320px, 0.75fr);
+    gap: 14px;
+}
+
+.panel {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: rgba(17, 20, 24, 0.9);
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+}
+
+.panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 15px 16px;
+    border-bottom: 1px solid var(--border);
+}
+
+.panel-title {
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    margin: 0;
+    font-size: 14px;
+    font-weight: 800;
+}
+
+.panel-title svg {
+    color: var(--cyan);
+}
+
+.status-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 30px;
+    padding: 6px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--muted);
+    background: var(--panel-soft);
+    font-size: 12px;
+    font-weight: 800;
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: var(--red);
+    box-shadow: 0 0 16px rgba(255, 77, 87, 0.8);
+}
+
+.status-pill.on {
+    color: #bfffe2;
+    border-color: rgba(0, 230, 138, 0.45);
+}
+
+.status-pill.on .status-dot {
+    background: var(--green);
+    box-shadow: 0 0 18px rgba(0, 230, 138, 0.9);
+}
+
+.metrics {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
     padding: 14px;
-    margin: 8px;
-    border: none;
-    border-radius: 12px;
-    font-size: 15px;
+}
+
+.metric {
+    min-height: 112px;
+    padding: 14px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel-soft);
+}
+
+.metric-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+}
+
+.metric-value {
+    margin-top: 16px;
+    font-size: clamp(24px, 4vw, 36px);
+    font-weight: 900;
+    line-height: 1;
+    overflow-wrap: anywhere;
+}
+
+.metric-note {
+    margin-top: 10px;
+    color: var(--muted);
+    font-size: 12px;
+    overflow-wrap: anywhere;
+}
+
+.positive { color: var(--green); }
+.negative { color: var(--red); }
+.neutral { color: var(--text); }
+
+.chart-wrap {
+    height: 330px;
+    padding: 12px 14px 16px;
+}
+
+.side {
+    display: grid;
+    gap: 14px;
+}
+
+.settings {
+    padding: 14px;
+    display: grid;
+    gap: 15px;
+}
+
+.setting-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.setting-label {
+    display: grid;
+    gap: 3px;
+}
+
+.setting-label strong {
+    font-size: 13px;
+}
+
+.setting-label span {
+    color: var(--muted);
+    font-size: 12px;
+}
+
+.toggle {
+    position: relative;
+    width: 52px;
+    height: 30px;
+}
+
+.toggle input {
+    position: absolute;
+    opacity: 0;
+}
+
+.toggle span {
+    position: absolute;
+    inset: 0;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: #22272d;
     cursor: pointer;
 }
 
-.start {
-    background: #00ff9d;
-    color: black;
+.toggle span::before {
+    content: "";
+    position: absolute;
+    width: 22px;
+    height: 22px;
+    top: 3px;
+    left: 3px;
+    border-radius: 50%;
+    background: var(--muted);
+    transition: transform .18s ease, background .18s ease;
 }
 
-.stop {
-    background: #ff3b3b;
+.toggle input:checked + span {
+    border-color: rgba(0, 230, 138, 0.55);
+    background: rgba(0, 230, 138, 0.14);
 }
 
-/* VALUE */
-.value {
-    font-size: 20px;
-    font-weight: bold;
+.toggle input:checked + span::before {
+    transform: translateX(22px);
+    background: var(--green);
 }
 
-.green { color: #00ff9d; }
-.red { color: #ff3b3b; }
-
-/* SWITCH */
-.switch {
-  position: relative;
-  display: inline-block;
-  width: 55px;
-  height: 30px;
+.range-row {
+    display: grid;
+    gap: 9px;
 }
 
-.switch input { display:none }
-
-.slider {
-  position: absolute;
-  background-color: #333;
-  border-radius: 34px;
-  top: 0; left: 0; right: 0; bottom: 0;
+.range-meta {
+    display: flex;
+    justify-content: space-between;
+    color: var(--muted);
+    font-size: 12px;
 }
 
-.slider:before {
-  position: absolute;
-  content: "";
-  height: 22px; width: 22px;
-  left: 4px; bottom: 4px;
-  background: white;
-  border-radius: 50%;
-  transition: .3s;
+input[type="range"] {
+    width: 100%;
+    accent-color: var(--green);
 }
 
-input:checked + .slider {
-  background-color: #00ff9d;
+.number-input {
+    width: 76px;
+    height: 36px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #0d1014;
+    color: var(--text);
 }
 
-input:checked + .slider:before {
-  transform: translateX(24px);
+.signal-box {
+    padding: 14px;
+    border-top: 1px solid var(--border);
+    color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+    overflow-wrap: anywhere;
 }
 
-input[type=range] {
-    width: 200px;
+.log-panel {
+    grid-column: 1 / -1;
 }
 
-.log {
-    max-height: 120px;
+.logs {
+    height: 250px;
     overflow-y: auto;
-    font-size: 11px;
-    text-align: left;
+    padding: 12px 14px 14px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 12px;
+    line-height: 1.55;
+    color: #d7dde3;
 }
 
+.log-line {
+    display: grid;
+    grid-template-columns: 82px minmax(0, 1fr);
+    gap: 10px;
+    padding: 6px 0;
+    border-bottom: 1px solid rgba(43, 49, 56, 0.55);
+}
+
+.log-time {
+    color: var(--muted);
+}
+
+.empty-log {
+    color: var(--muted);
+}
+
+@media (max-width: 900px) {
+    .topbar {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    .actions {
+        justify-content: stretch;
+    }
+
+    .btn {
+        flex: 1;
+    }
+
+    .grid {
+        grid-template-columns: 1fr;
+    }
+
+    .metrics {
+        grid-template-columns: 1fr;
+    }
+}
+
+@media (max-width: 480px) {
+    .page {
+        width: min(100% - 18px, 1180px);
+        padding-top: 14px;
+    }
+
+    .brand-mark {
+        width: 38px;
+        height: 38px;
+    }
+
+    .chart-wrap {
+        height: 260px;
+    }
+
+    .log-line {
+        grid-template-columns: 1fr;
+        gap: 2px;
+    }
+}
 </style>
 </head>
 
 <body>
+<main class="page">
+    <header class="topbar">
+        <div class="brand">
+            <div class="brand-mark"><i data-lucide="activity"></i></div>
+            <div>
+                <h1>BOT PRO</h1>
+                <p id="subtitle">Trading console</p>
+            </div>
+        </div>
+        <div class="actions">
+            <button class="btn btn-start" onclick="startBot()" title="Avvia bot">
+                <i data-lucide="play"></i>
+                <span>START</span>
+            </button>
+            <button class="btn btn-stop" onclick="stopBot()" title="Ferma bot">
+                <i data-lucide="square"></i>
+                <span>STOP</span>
+            </button>
+        </div>
+    </header>
 
-<h1>BOT PRO</h1>
+    <section class="grid">
+        <div class="panel">
+            <div class="panel-header">
+                <h2 class="panel-title"><i data-lucide="gauge"></i>Overview</h2>
+                <div id="statusPill" class="status-pill">
+                    <span class="status-dot"></span>
+                    <span id="status">OFF</span>
+                </div>
+            </div>
 
-<div>
-    <button class="btn start" onclick="fetch('/start')">START</button>
-    <button class="btn stop" onclick="fetch('/stop')">STOP</button>
-</div>
+            <div class="metrics">
+                <div class="metric">
+                    <div class="metric-label"><i data-lucide="wallet"></i>Balance</div>
+                    <div id="balance" class="metric-value neutral">0.00</div>
+                    <div id="exchange" class="metric-note">Exchange: -</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label"><i data-lucide="trending-up"></i>Profit</div>
+                    <div id="profit" class="metric-value neutral">0.00</div>
+                    <div id="profitNote" class="metric-note">PnL aperto</div>
+                </div>
+                <div class="metric">
+                    <div class="metric-label"><i data-lucide="radio"></i>Signal</div>
+                    <div id="signalMain" class="metric-value neutral">NONE</div>
+                    <div id="lastUpdate" class="metric-note">Ultimo update: -</div>
+                </div>
+            </div>
 
-<div class="card">
-    <h3 id="status" class="off">OFF</h3>
-    <p>Signal: <b id="signal">NONE</b></p>
-</div>
+            <div class="chart-wrap">
+                <canvas id="chart"></canvas>
+            </div>
+        </div>
 
-<div class="card">
-    <p>Balance</p>
-    <div id="balance" class="value">0</div>
-</div>
+        <aside class="side">
+            <div class="panel">
+                <div class="panel-header">
+                    <h2 class="panel-title"><i data-lucide="sliders-horizontal"></i>Settings</h2>
+                </div>
+                <div class="settings">
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <strong>AI</strong>
+                            <span>Segnali automatici</span>
+                        </div>
+                        <label class="toggle">
+                            <input type="checkbox" id="ai" onchange="saveSettings()" checked>
+                            <span></span>
+                        </label>
+                    </div>
 
-<div class="card">
-    <p>Profit</p>
-    <div id="profit" class="value">0</div>
-</div>
+                    <div class="range-row">
+                        <div class="range-meta">
+                            <span>Risk</span>
+                            <strong id="riskValue">1%</strong>
+                        </div>
+                        <input type="range" min="0.1" max="10" step="0.1" value="1" id="risk" oninput="saveSettings()">
+                    </div>
 
-<div class="card">
-    <canvas id="chart"></canvas>
-</div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <strong>Max Trades</strong>
+                            <span>Limite posizioni</span>
+                        </div>
+                        <input class="number-input" type="number" min="1" max="20" value="2" id="maxTrades" onchange="saveSettings()">
+                    </div>
+                </div>
+                <div class="signal-box" id="signal">NONE</div>
+            </div>
 
-<div class="card">
-    <h3>AI</h3>
-    <label class="switch">
-        <input type="checkbox" id="ai" onchange="saveSettings()" checked>
-        <span class="slider"></span>
-    </label>
+            <div class="panel">
+                <div class="panel-header">
+                    <h2 class="panel-title"><i data-lucide="shield-check"></i>Runtime</h2>
+                </div>
+                <div class="settings">
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <strong>Status</strong>
+                            <span id="runtimeStatus">In attesa</span>
+                        </div>
+                        <i data-lucide="server"></i>
+                    </div>
+                    <div class="setting-row">
+                        <div class="setting-label">
+                            <strong>Equity Points</strong>
+                            <span id="equityPoints">0</span>
+                        </div>
+                        <i data-lucide="line-chart"></i>
+                    </div>
+                </div>
+            </div>
+        </aside>
 
-    <h3>Risk</h3>
-    <input type="range" min="0.5" max="3" step="0.5" value="1" id="risk" oninput="saveSettings()">
-    <p id="riskValue">1%</p>
-</div>
-
-<div class="card log" id="log"></div>
+        <div class="panel log-panel">
+            <div class="panel-header">
+                <h2 class="panel-title"><i data-lucide="terminal"></i>Logs</h2>
+                <span class="status-pill"><span id="logCount">0</span> righe</span>
+            </div>
+            <div class="logs" id="log"></div>
+        </div>
+    </section>
+</main>
 
 <script>
-
-let chart = new Chart(document.getElementById("chart"), {
-    type: 'line',
-    data: { labels: [], datasets: [{ data: [], borderColor: '#00ff9d' }] },
-    options: { plugins:{legend:{display:false}}, scales:{x:{display:false},y:{display:false}} }
+const money = new Intl.NumberFormat('it-IT', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
 });
 
-function saveSettings(){
-    let r = document.getElementById("risk").value;
-    document.getElementById("riskValue").innerText = r + "%";
+let isApplyingSettings = false;
 
-    fetch('/settings',{
-        method:'POST',
-        headers:{'Content-Type':'application/json'},
-        body:JSON.stringify({
-            risk:r,
-            max_trades:2,
-            ai:document.getElementById("ai").checked
+let chart = new Chart(document.getElementById("chart"), {
+    type: "line",
+    data: {
+        labels: [],
+        datasets: [{
+            data: [],
+            borderColor: "#00e68a",
+            backgroundColor: "rgba(0, 230, 138, 0.12)",
+            fill: true,
+            pointRadius: 0,
+            borderWidth: 2,
+            tension: 0.35
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        plugins: {
+            legend: { display: false },
+            tooltip: {
+                mode: "index",
+                intersect: false,
+                displayColors: false
+            }
+        },
+        scales: {
+            x: {
+                display: false,
+                grid: { display: false }
+            },
+            y: {
+                ticks: { color: "#9aa4ad" },
+                grid: { color: "rgba(154, 164, 173, 0.12)" }
+            }
+        }
+    }
+});
+
+function startBot(){
+    fetch("/start").then(update);
+}
+
+function stopBot(){
+    fetch("/stop").then(update);
+}
+
+function saveSettings(){
+    if (isApplyingSettings) return;
+
+    const risk = document.getElementById("risk").value;
+    const maxTrades = document.getElementById("maxTrades").value;
+    document.getElementById("riskValue").innerText = risk + "%";
+
+    fetch("/settings", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({
+            risk,
+            max_trades: maxTrades,
+            ai: document.getElementById("ai").checked
         })
     });
 }
 
+function setStatus(status){
+    const pill = document.getElementById("statusPill");
+    const label = document.getElementById("status");
+    label.innerText = status;
+    pill.className = "status-pill " + (status === "ON" ? "on" : "");
+    document.getElementById("runtimeStatus").innerText = status === "ON" ? "Bot attivo" : "Bot fermo";
+}
+
+function setProfit(value){
+    const profit = Number(value || 0);
+    const node = document.getElementById("profit");
+    node.innerText = money.format(profit);
+    node.className = "metric-value " + (profit > 0 ? "positive" : profit < 0 ? "negative" : "neutral");
+    document.getElementById("profitNote").innerText = profit >= 0 ? "PnL aperto positivo" : "PnL aperto negativo";
+}
+
+function applySettings(settings){
+    if (!settings) return;
+
+    isApplyingSettings = true;
+    document.getElementById("ai").checked = settings.ai === true;
+    document.getElementById("risk").value = settings.risk;
+    document.getElementById("riskValue").innerText = settings.risk + "%";
+    document.getElementById("maxTrades").value = settings.max_trades || 2;
+    isApplyingSettings = false;
+}
+
+function renderLogs(logs){
+    const container = document.getElementById("log");
+    container.textContent = "";
+
+    const items = Array.isArray(logs) ? logs.slice(-80) : [];
+    document.getElementById("logCount").innerText = items.length;
+
+    if (!items.length) {
+        const empty = document.createElement("div");
+        empty.className = "empty-log";
+        empty.textContent = "Nessun log disponibile";
+        container.appendChild(empty);
+        return;
+    }
+
+    const now = new Date().toLocaleTimeString("it-IT", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    for (const item of items) {
+        const row = document.createElement("div");
+        row.className = "log-line";
+
+        const time = document.createElement("span");
+        time.className = "log-time";
+        time.textContent = now;
+
+        const msg = document.createElement("span");
+        msg.textContent = item;
+
+        row.appendChild(time);
+        row.appendChild(msg);
+        container.appendChild(row);
+    }
+
+    container.scrollTop = container.scrollHeight;
+}
+
+function updateChart(equity){
+    const points = Array.isArray(equity) ? equity : [];
+    document.getElementById("equityPoints").innerText = points.length;
+
+    if (!points.length) return;
+
+    chart.data.labels = points.map((_, i) => i + 1);
+    chart.data.datasets[0].data = points;
+    chart.update();
+}
+
 function update(){
+    fetch("/data")
+    .then(response => response.json())
+    .then(data => {
+        const status = data.status || "OFF";
+        const signal = data.signal || "NONE";
+        const exchange = data.exchange || "-";
 
-    fetch('/data')
-    .then(r=>r.json())
-    .then(d=>{
+        setStatus(status);
+        document.getElementById("subtitle").innerText = exchange.toUpperCase() + " trading console";
+        document.getElementById("exchange").innerText = "Exchange: " + exchange.toUpperCase();
+        document.getElementById("signal").innerText = signal;
+        document.getElementById("signalMain").innerText = signal.split(" ").slice(-1)[0] || "NONE";
+        document.getElementById("balance").innerText = money.format(Number(data.balance || 0));
+        document.getElementById("lastUpdate").innerText = "Ultimo update: " + new Date().toLocaleTimeString("it-IT");
 
-        let status = document.getElementById("status");
+        setProfit(data.profit);
+        applySettings(data.settings);
+        updateChart(data.equity);
+        renderLogs(data.logs);
 
-        status.innerText = d.status;
-        status.className = d.status === "ON" ? "on" : "off";
-
-        document.getElementById("signal").innerText = d.signal;
-        document.getElementById("balance").innerText = Number(d.balance || 0).toFixed(2);
-
-        let p = document.getElementById("profit");
-        p.innerText = Number(d.profit || 0).toFixed(2);
-        p.className = "value " + (d.profit >= 0 ? "green" : "red");
-
-        if(d.settings){
-            document.getElementById("ai").checked = d.settings.ai === true;
-            document.getElementById("risk").value = d.settings.risk;
-            document.getElementById("riskValue").innerText = d.settings.risk + "%";
-        }
-
-        if(d.equity && d.equity.length){
-            chart.data.labels = d.equity.map((_,i)=>i);
-            chart.data.datasets[0].data = d.equity;
-            chart.update();
-        }
-
-        if(d.logs){
-            document.getElementById("log").innerHTML = d.logs.join("<br>");
-        }
-
+        if (window.lucide) lucide.createIcons();
+    })
+    .catch(() => {
+        setStatus("OFF");
+        document.getElementById("runtimeStatus").innerText = "Connessione non disponibile";
     });
 }
 
 setInterval(update, 2000);
+update();
 
-// PWA
-if ('serviceWorker' in navigator) {
-  navigator.serviceWorker.register('/static/sw.js');
+if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/static/sw.js");
 }
 
+if (window.lucide) lucide.createIcons();
 </script>
-
 </body>
+</html>
+
 </html>
