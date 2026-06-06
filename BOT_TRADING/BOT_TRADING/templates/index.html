@@ -1018,7 +1018,11 @@ function renderGuard(guard){
         text.innerText = "Trade bloccati: " + guard.reason + (guard.stats_start_at ? " | Conteggio dal " + guard.stats_start_at : "");
     } else {
         banner.classList.remove("active");
-        text.innerText = guard && guard.stats_start_at ? "Guardiano ok | Conteggio dal " + guard.stats_start_at : "Guardiano trade ok";
+        text.innerText = guard && guard.enabled === false
+            ? "Guardiano trade disattivato"
+            : guard && guard.stats_start_at
+                ? "Guardiano ok | Conteggio dal " + guard.stats_start_at
+                : "Guardiano trade ok";
     }
 }
 
