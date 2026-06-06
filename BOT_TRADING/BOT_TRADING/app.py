@@ -53,6 +53,12 @@ def get_dashboard_reports():
     }
 
 
+def get_guard_status():
+    if hasattr(bot, "get_guard_status"):
+        return bot.get_guard_status()
+    return {"active": False, "reason": "ok"}
+
+
 @app.route("/")
 def home():
     return render_template("index.html")
@@ -77,9 +83,10 @@ def stop():
 @app.route("/settings", methods=["POST"])
 def settings():
     data = request.get_json(silent=True) or {}
+    max_risk = bot.get_max_runtime_risk() if hasattr(bot, "get_max_runtime_risk") else 1.0
 
-    bot.settings["risk"] = clamp_float(data.get("risk"), 1.0, 0.1, 10.0)
-    bot.settings["max_trades"] = clamp_int(data.get("max_trades"), 2, 1, 20)
+    bot.settings["risk"] = clamp_float(data.get("risk"), 1.0, 0.1, max_risk)
+    bot.settings["max_trades"] = clamp_int(data.get("max_trades"), 1, 1, 3)
     bot.settings["ai"] = data.get("ai", True) is True
 
     return "OK"
@@ -97,6 +104,7 @@ def data():
         "settings": bot.settings,
         "equity": bot.equity_history,
         "reports": get_dashboard_reports(),
+        "guard": get_guard_status(),
     })
 
 
