@@ -36,6 +36,8 @@ order_cooldowns = {}
 last_trade_bar = {}
 tracked_positions = {}
 notified_closed_keys = set()
+recorded_closed_keys = set()
+last_closed_pnl_sync = 0
 last_telegram_update_id = None
 daily_stats = {
     "date": None,
@@ -160,6 +162,43 @@ def get_bybit_tp_atr():
 
 def get_min_adx():
     return get_float_env("BYBIT_MIN_ADX", 18)
+
+
+def get_max_runtime_risk():
+    return get_float_env("BYBIT_MAX_RISK_PCT", 1.0)
+
+
+def get_daily_max_loss_pct():
+    return get_float_env("BYBIT_DAILY_MAX_LOSS_PCT", 1.5)
+
+
+def get_monthly_max_loss_pct():
+    return get_float_env("BYBIT_MONTHLY_MAX_LOSS_PCT", 5.0)
+
+
+def get_min_monthly_win_rate():
+    return get_float_env("BYBIT_MIN_MONTHLY_WIN_RATE", 35.0)
+
+
+def get_monthly_win_rate_check_trades():
+    try:
+        return int(os.getenv("BYBIT_MONTHLY_WIN_RATE_CHECK_TRADES", "20"))
+    except ValueError:
+        return 20
+
+
+def get_max_daily_losses():
+    try:
+        return int(os.getenv("BYBIT_MAX_DAILY_LOSSES", "4"))
+    except ValueError:
+        return 4
+
+
+def get_max_consecutive_losses():
+    try:
+        return int(os.getenv("BYBIT_MAX_CONSECUTIVE_LOSSES", "3"))
+    except ValueError:
+        return 3
 
 
 def local_now():
@@ -499,11 +538,152 @@ def quality_signal(df):
     )
 
 
+def strong_htf_trend(symbol):
+    checks = []
+
+    for interval in ("15", "60"):
+        htf = get_data(symbol, interval=interval, limit=180)
+        if htf is None or len(htf) < 90:
+            return None, f"sniper no {interval}m data"
+
+        data = htf.copy()
+        data["ema_fast"] = data["close"].ewm(span=21).mean()
+        data["ema_slow"] = data["close"].ewm(span=55).mean()
+        data["rsi"] = calculate_rsi(data["close"], RSI_PERIOD)
+        adx = calculate_adx(data)
+
+        last = data.iloc[-1]
+        prev = data.iloc[-8]
+        slope = last["ema_fast"] - prev["ema_fast"]
+
+        if adx is None or adx < max(get_min_adx(), 22):
+            return None, f"sniper {interval}m adx too low"
+
+        if last["ema_fast"] > last["ema_slow"] and slope > 0 and last["close"] > last["ema_fast"]:
+            checks.append("BUY")
+        elif last["ema_fast"] < last["ema_slow"] and slope < 0 and last["close"] < last["ema_fast"]:
+            checks.append("SELL")
+        else:
+            return None, f"sniper {interval}m trend not clean"
+
+    if checks[0] == checks[1]:
+        return checks[0], "sniper 15m/60m aligned"
+
+    return None, "sniper htf disagreement"
+
+
+def close_near_extreme(candle, side):
+    full = candle["high"] - candle["low"]
+    if full <= 0:
+        return False
+
+    if side == "BUY":
+        return ((candle["high"] - candle["close"]) / full) <= 0.25
+
+    return ((candle["close"] - candle["low"]) / full) <= 0.25
+
+
+def sniper_signal(df):
+    if df is None or len(df) < 120:
+        return None, "sniper not enough data"
+
+    symbol = df["symbol"].iloc[-1]
+    confirm_side, confirm_reason = strong_htf_trend(symbol)
+    if confirm_side is None:
+        return None, confirm_reason
+
+    data = df.copy()
+    data["ema_fast"] = data["close"].ewm(span=21).mean()
+    data["ema_slow"] = data["close"].ewm(span=55).mean()
+    data["rsi"] = calculate_rsi(data["close"], RSI_PERIOD)
+    data["range"] = data["high"] - data["low"]
+
+    atr_current = data["range"].rolling(14).mean().iloc[-1]
+    atr_average = data["range"].rolling(80).mean().iloc[-1]
+    volume_current = data["volume"].iloc[-1]
+    volume_average = data["volume"].rolling(40).mean().iloc[-1]
+    adx = calculate_adx(data)
+
+    if (
+        pd.isna(atr_current)
+        or pd.isna(atr_average)
+        or pd.isna(volume_average)
+        or atr_current <= 0
+        or atr_average <= 0
+        or adx is None
+    ):
+        return None, "sniper invalid indicators"
+
+    if adx < max(get_min_adx(), 24):
+        return None, f"sniper adx too low {round(adx, 1)}"
+
+    if atr_current < atr_average * 0.65:
+        return None, "sniper low volatility"
+
+    if atr_current > atr_average * 1.9:
+        return None, "sniper volatility spike"
+
+    if volume_current < volume_average * 0.85:
+        return None, "sniper volume too low"
+
+    last = data.iloc[-1]
+    prev = data.iloc[-2]
+    prior = data.iloc[-3]
+    rsi = last["rsi"]
+    body_ratio = candle_body_ratio(last)
+
+    if pd.isna(rsi):
+        return None, "sniper invalid rsi"
+
+    recent_high = data["high"].iloc[-12:-2].max()
+    recent_low = data["low"].iloc[-12:-2].min()
+
+    buy_setup = (
+        confirm_side == "BUY"
+        and last["ema_fast"] > last["ema_slow"]
+        and last["close"] > last["ema_fast"]
+        and prior["low"] <= prior["ema_fast"]
+        and prev["close"] > prev["open"]
+        and last["close"] > last["open"]
+        and last["close"] > recent_high
+        and body_ratio >= 0.45
+        and close_near_extreme(last, "BUY")
+        and 50 <= rsi <= 64
+    )
+
+    if buy_setup:
+        return "BUY", f"{confirm_reason} breakout forte rsi={round(rsi, 1)} adx={round(adx, 1)}"
+
+    sell_setup = (
+        confirm_side == "SELL"
+        and last["ema_fast"] < last["ema_slow"]
+        and last["close"] < last["ema_fast"]
+        and prior["high"] >= prior["ema_fast"]
+        and prev["close"] < prev["open"]
+        and last["close"] < last["open"]
+        and last["close"] < recent_low
+        and body_ratio >= 0.45
+        and close_near_extreme(last, "SELL")
+        and 36 <= rsi <= 50
+    )
+
+    if sell_setup:
+        return "SELL", f"{confirm_reason} breakout forte rsi={round(rsi, 1)} adx={round(adx, 1)}"
+
+    return None, (
+        f"sniper no setup side={confirm_side} rsi={round(rsi, 1)} "
+        f"adx={round(adx, 1)} body={round(body_ratio, 2)}"
+    )
+
+
 def get_signal(df):
     mode = get_strategy_mode()
 
     if mode == "relaxed":
         return relaxed_signal(df)
+
+    if mode == "sniper":
+        return sniper_signal(df)
 
     if mode == "quality":
         return quality_signal(df)
@@ -613,22 +793,83 @@ def ensure_monthly_stats():
     )
 
 
-def record_closed_trade(pnl):
+def closed_pnl_datetime(closed_pnl):
+    raw = closed_pnl.get("updatedTime") or closed_pnl.get("createdTime")
+    try:
+        return datetime.fromtimestamp(int(raw) / 1000, ZoneInfo(os.getenv("DAILY_SUMMARY_TZ", "Europe/Rome")))
+    except Exception:
+        return local_now()
+
+
+def record_closed_trade(pnl, closed_at=None):
     ensure_daily_stats()
     ensure_monthly_stats()
-    daily_stats["realized_pnl"] += pnl
-    daily_stats["closed_trades"] += 1
-    monthly_stats["realized_pnl"] += pnl
-    monthly_stats["closed_trades"] += 1
+
+    closed_at = closed_at or local_now()
+    daily_matches = closed_at.date().isoformat() == daily_stats["date"]
+    monthly_matches = closed_at.strftime("%Y-%m") == monthly_stats["month"]
+
+    if daily_matches:
+        daily_stats["realized_pnl"] += pnl
+        daily_stats["closed_trades"] += 1
+
+    if monthly_matches:
+        monthly_stats["realized_pnl"] += pnl
+        monthly_stats["closed_trades"] += 1
 
     if pnl > 0:
-        daily_stats["wins"] += 1
-        daily_stats["consecutive_losses"] = 0
-        monthly_stats["wins"] += 1
+        if daily_matches:
+            daily_stats["wins"] += 1
+            daily_stats["consecutive_losses"] = 0
+        if monthly_matches:
+            monthly_stats["wins"] += 1
     else:
-        daily_stats["losses"] += 1
-        daily_stats["consecutive_losses"] += 1
-        monthly_stats["losses"] += 1
+        if daily_matches:
+            daily_stats["losses"] += 1
+            daily_stats["consecutive_losses"] += 1
+        if monthly_matches:
+            monthly_stats["losses"] += 1
+
+
+def record_closed_pnl(symbol, closed_pnl):
+    key = closed_pnl_key(symbol, closed_pnl)
+    if key in recorded_closed_keys:
+        return False
+
+    recorded_closed_keys.add(key)
+    record_closed_trade(safe_float(closed_pnl.get("closedPnl")), closed_pnl_datetime(closed_pnl))
+    return True
+
+
+def sync_closed_pnl_stats():
+    global last_closed_pnl_sync
+
+    now = time.time()
+    if now - last_closed_pnl_sync < 300:
+        return
+
+    last_closed_pnl_sync = now
+    ensure_daily_stats()
+    ensure_monthly_stats()
+
+    for symbol in get_symbols():
+        try:
+            response = get_session().get_closed_pnl(
+                category=get_category(),
+                symbol=symbol,
+                limit=100,
+            )
+        except Exception as exc:
+            log(f"SYNC CLOSED PNL ERROR {symbol}: {type(exc).__name__}: {exc}")
+            continue
+
+        if not api_ok(response):
+            log(f"SYNC CLOSED PNL FAILED {symbol}: {response}")
+            continue
+
+        rows = response.get("result", {}).get("list", [])
+        for row in reversed(rows):
+            record_closed_pnl(symbol, row)
 
 
 def stats_snapshot(stats, period_key):
@@ -667,6 +908,47 @@ def get_dashboard_reports():
     }
 
 
+def trading_guard_reason():
+    ensure_daily_stats()
+    ensure_monthly_stats()
+
+    daily_start = daily_stats["start_balance"] or balance
+    monthly_start = monthly_stats["start_balance"] or balance
+    daily_total = float(daily_stats["realized_pnl"]) + float(profit)
+    monthly_total = float(monthly_stats["realized_pnl"]) + float(profit)
+
+    if daily_start and daily_total <= -(daily_start * get_daily_max_loss_pct() / 100):
+        return f"daily loss limit reached {format_money(daily_total)}"
+
+    if monthly_start and monthly_total <= -(monthly_start * get_monthly_max_loss_pct() / 100):
+        return f"monthly loss limit reached {format_money(monthly_total)}"
+
+    if daily_stats["losses"] >= get_max_daily_losses():
+        return f"daily loss count reached {daily_stats['losses']}"
+
+    if daily_stats["consecutive_losses"] >= get_max_consecutive_losses():
+        return f"consecutive losses reached {daily_stats['consecutive_losses']}"
+
+    trades = monthly_stats["closed_trades"]
+    if trades >= get_monthly_win_rate_check_trades():
+        win_rate = (monthly_stats["wins"] / trades) * 100 if trades else 0
+        if win_rate < get_min_monthly_win_rate():
+            return f"monthly win rate too low {round(win_rate, 1)}%"
+
+    return None
+
+
+def get_guard_status():
+    reason = trading_guard_reason()
+    return {
+        "active": reason is not None,
+        "reason": reason or "ok",
+        "max_risk_pct": get_max_runtime_risk(),
+        "daily_max_loss_pct": get_daily_max_loss_pct(),
+        "monthly_max_loss_pct": get_monthly_max_loss_pct(),
+    }
+
+
 def notify_position_closed(symbol, previous_position):
     closed_pnl = get_latest_closed_pnl(symbol)
 
@@ -687,7 +969,7 @@ def notify_position_closed(symbol, previous_position):
     exit_price = closed_pnl.get("avgExitPrice") or "?"
     result = "PROFITTO" if pnl > 0 else "PERDITA" if pnl < 0 else "PAREGGIO"
 
-    record_closed_trade(pnl)
+    record_closed_pnl(symbol, closed_pnl)
     notify(
         "BOT PRO - posizione chiusa\n"
         f"Exchange: Bybit {'Demo' if is_demo_mode() else 'Live'}\n"
@@ -748,6 +1030,7 @@ def get_open_positions_text():
 
 def build_report_message(title="BOT PRO - report richiesto"):
     ensure_daily_stats()
+    ensure_monthly_stats()
 
     realized = daily_stats["realized_pnl"]
     open_pnl = profit
@@ -755,6 +1038,8 @@ def build_report_message(title="BOT PRO - report richiesto"):
     start_balance = daily_stats["start_balance"] or balance
     balance_change = balance - start_balance
     result = "profittevole" if total > 0 else "in perdita" if total < 0 else "in pareggio"
+    guard = get_guard_status()
+    monthly = stats_snapshot(monthly_stats, "month")
     return (
         f"{title}\n"
         f"Data: {daily_stats['date']}\n"
@@ -766,9 +1051,16 @@ def build_report_message(title="BOT PRO - report richiesto"):
         f"PnL aperto: {format_money(open_pnl)}\n"
         f"PnL totale: {format_money(total)}\n"
         f"Variazione balance: {format_money(balance_change)}\n"
+        f"\nMese: {monthly['period']}\n"
+        f"Esito mese: {monthly['result']}\n"
+        f"Trade mese: {monthly['closed_trades']}\n"
+        f"Vinti/Persi mese: {monthly['wins']}/{monthly['losses']}\n"
+        f"Win rate mese: {monthly['win_rate']}%\n"
+        f"PnL mese: {format_money(monthly['total_pnl'])}\n"
+        f"\n"
         f"Balance: {format_money(balance)}\n"
         f"Ultimo segnale: {last_signal}\n"
-        f"Blocco trade: disattivato\n"
+        f"Guardiano trade: {'ATTIVO' if guard['active'] else 'ok'} ({guard['reason']})\n"
         f"Posizioni:\n{get_open_positions_text()}"
     )
 
@@ -842,7 +1134,7 @@ def process_telegram_commands():
 
 
 def calculate_qty(symbol, entry, stop_loss):
-    risk_pct = max(0.1, min(float(settings["risk"]), 10.0))
+    risk_pct = max(0.1, min(float(settings["risk"]), get_max_runtime_risk()))
     risk_amount = balance * (risk_pct / 100)
     stop_distance = abs(entry - stop_loss)
 
@@ -878,6 +1170,12 @@ def open_trade(df, signal):
 
     if len(open_symbols) >= settings["max_trades"]:
         log("MAX TRADES GLOBAL")
+        return
+
+    guard_reason = trading_guard_reason()
+    if guard_reason:
+        log(f"TRADE BLOCKED: {guard_reason}")
+        last_signal = f"{symbol} {signal} BLOCKED"
         return
 
     ticker = get_session().get_tickers(category=get_category(), symbol=symbol)
@@ -1071,6 +1369,7 @@ def run_bot():
             try:
                 refresh_account()
                 ensure_daily_stats()
+                sync_closed_pnl_stats()
                 equity_history.append(balance + profit)
                 equity_history = equity_history[-100:]
 
