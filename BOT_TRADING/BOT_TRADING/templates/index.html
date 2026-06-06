@@ -660,7 +660,7 @@ input[type="range"] {
 
             <div class="metrics">
                 <div class="metric">
-                    <div class="metric-label"><i data-lucide="wallet"></i>Balance</div>
+                    <div class="metric-label"><i data-lucide="wallet"></i>Capitale</div>
                     <div id="balance" class="metric-value neutral">0.00</div>
                     <div id="exchange" class="metric-note">Exchange: -</div>
                 </div>
@@ -839,7 +839,7 @@ input[type="range"] {
             <div class="tool-card">
                 <h3><i data-lucide="shield"></i>Controlli rischio</h3>
                 <ul>
-                    <li>Il rischio operativo viene tagliato dal cap massimo.</li>
+                    <li>Il rischio operativo viene calcolato sul capitale impostato.</li>
                     <li>Il guardiano blocca nuovi trade se giorno o mese superano le soglie perdita.</li>
                     <li>Demo attiva se vedi <strong>demo=True</strong> nei log.</li>
                 </ul>
@@ -1167,13 +1167,18 @@ function update(){
         const status = data.status || "OFF";
         const signal = data.signal || "NONE";
         const exchange = data.exchange || "-";
+        const walletBalance = Number(data.wallet_balance || data.balance || 0);
+        const tradingCapital = Number(data.trading_capital || data.balance || 0);
+        const accountSize = Number(data.account_size || 0);
 
         setStatus(status);
         document.getElementById("subtitle").innerText = exchange.toUpperCase() + " trading console";
-        document.getElementById("exchange").innerText = "Exchange: " + exchange.toUpperCase();
+        document.getElementById("exchange").innerText = accountSize > 0
+            ? "Operativo: " + money.format(accountSize) + " | Wallet: " + money.format(walletBalance)
+            : "Exchange: " + exchange.toUpperCase();
         document.getElementById("signal").innerText = signal;
         document.getElementById("signalMain").innerText = signal.split(" ").slice(-1)[0] || "NONE";
-        document.getElementById("balance").innerText = money.format(Number(data.balance || 0));
+        document.getElementById("balance").innerText = money.format(tradingCapital);
         document.getElementById("lastUpdate").innerText = "Ultimo update: " + new Date().toLocaleTimeString("it-IT");
 
         setProfit(data.profit);
