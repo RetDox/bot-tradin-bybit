@@ -334,6 +334,24 @@ select {
     font-size: 14px;
 }
 
+.guard-banner {
+    display: none;
+    align-items: center;
+    gap: 10px;
+    margin: 0 14px 14px;
+    padding: 12px 14px;
+    border: 1px solid rgba(245, 184, 75, 0.45);
+    border-radius: 8px;
+    background: rgba(245, 184, 75, 0.10);
+    color: #ffe0a3;
+    font-size: 13px;
+    font-weight: 800;
+}
+
+.guard-banner.active {
+    display: flex;
+}
+
 .positive { color: var(--green); }
 .negative { color: var(--red); }
 .neutral { color: var(--text); }
@@ -706,6 +724,11 @@ input[type="range"] {
                 </div>
             </div>
 
+            <div class="guard-banner" id="guardBanner">
+                <i data-lucide="octagon-alert"></i>
+                <span id="guardText">Guardiano trade attivo</span>
+            </div>
+
             <div class="chart-wrap">
                 <canvas id="chart"></canvas>
             </div>
@@ -816,8 +839,8 @@ input[type="range"] {
             <div class="tool-card">
                 <h3><i data-lucide="shield"></i>Controlli rischio</h3>
                 <ul>
-                    <li>Controlla il rischio dal cursore in dashboard.</li>
-                    <li>Tieni basso il max qty se il broker rifiuta ordini grandi.</li>
+                    <li>Il rischio operativo viene tagliato dal cap massimo.</li>
+                    <li>Il guardiano blocca nuovi trade se giorno o mese superano le soglie perdita.</li>
                     <li>Demo attiva se vedi <strong>demo=True</strong> nei log.</li>
                 </ul>
             </div>
@@ -985,6 +1008,20 @@ function renderReports(reports){
     renderReport("monthly", reports.monthly, "Mese");
 }
 
+function renderGuard(guard){
+    const banner = document.getElementById("guardBanner");
+    const text = document.getElementById("guardText");
+    if (!banner || !text) return;
+
+    if (guard && guard.active) {
+        banner.classList.add("active");
+        text.innerText = "Trade bloccati: " + guard.reason;
+    } else {
+        banner.classList.remove("active");
+        text.innerText = "Guardiano trade ok";
+    }
+}
+
 function applySettings(settings){
     if (!settings) return;
 
@@ -1140,6 +1177,7 @@ function update(){
         updateChart(data.equity);
         renderLogs(data.logs);
         renderReports(data.reports);
+        renderGuard(data.guard);
 
         if (document.getElementById("candlesView").classList.contains("active")) {
             const symbol = document.getElementById("candleSymbol").value;
