@@ -168,8 +168,8 @@ def get_max_runtime_risk():
     return get_float_env("BYBIT_MAX_RISK_PCT", 1.0)
 
 
-def get_daily_max_loss_pct():
-    return get_float_env("BYBIT_DAILY_MAX_LOSS_PCT", 1.5)
+def is_trade_guard_enabled():
+    return env_bool("BYBIT_TRADE_GUARD", False)
 
 
 def get_monthly_max_loss_pct():
@@ -185,13 +185,6 @@ def get_monthly_win_rate_check_trades():
         return int(os.getenv("BYBIT_MONTHLY_WIN_RATE_CHECK_TRADES", "20"))
     except ValueError:
         return 20
-
-
-def get_max_daily_losses():
-    try:
-        return int(os.getenv("BYBIT_MAX_DAILY_LOSSES", "4"))
-    except ValueError:
-        return 4
 
 
 def get_max_consecutive_losses():
@@ -701,11 +694,90 @@ def sniper_signal(df):
     )
 
 
+def breakout_m1_signal(df):
+    if df is None or len(df) < 80:
+        return None, "m1 breakout not enough data"
+
+    symbol = df["symbol"].iloc[-1]
+    m15 = get_data(symbol, interval="15", limit=240)
+    if m15 is None or len(m15) < 210:
+        return None, "m1 breakout no m15 trend data"
+
+    trend = m15.copy()
+    trend["ema50"] = trend["close"].ewm(span=50).mean()
+    trend["ema200"] = trend["close"].ewm(span=200).mean()
+    trend_last = trend.iloc[-1]
+
+    data = df.copy()
+    data["rsi"] = calculate_rsi(data["close"], RSI_PERIOD)
+
+    prev_close = data["close"].shift(1)
+    data["tr"] = pd.concat(
+        [
+            data["high"] - data["low"],
+            (data["high"] - prev_close).abs(),
+            (data["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    data["atr"] = data["tr"].rolling(14).mean()
+
+    last = data.iloc[-1]
+    rsi = last["rsi"]
+    atr_current = last["atr"]
+    atr_average = data["atr"].iloc[-21:-1].mean()
+    volume_current = last["volume"]
+    volume_average = data["volume"].iloc[-21:-1].mean()
+    recent_high = data["high"].iloc[-11:-1].max()
+    recent_low = data["low"].iloc[-11:-1].min()
+
+    if (
+        pd.isna(rsi)
+        or pd.isna(atr_current)
+        or pd.isna(atr_average)
+        or pd.isna(volume_average)
+        or atr_current <= 0
+        or atr_average <= 0
+        or volume_average <= 0
+    ):
+        return None, "m1 breakout invalid indicators"
+
+    trend_buy = trend_last["ema50"] > trend_last["ema200"]
+    trend_sell = trend_last["ema50"] < trend_last["ema200"]
+    volume_ok = volume_current > volume_average
+    atr_ok = atr_current > atr_average
+    breaks_high = last["close"] > recent_high
+    breaks_low = last["close"] < recent_low
+
+    if trend_buy and rsi > 55 and breaks_high and volume_ok and atr_ok:
+        return (
+            "BUY",
+            f"m1 breakout buy ema50>ema200 rsi={round(rsi, 1)} "
+            f"vol={round(volume_current / volume_average, 2)} atr={round(atr_current / atr_average, 2)}"
+        )
+
+    if trend_sell and rsi < 45 and breaks_low and volume_ok and atr_ok:
+        return (
+            "SELL",
+            f"m1 breakout sell ema50<ema200 rsi={round(rsi, 1)} "
+            f"vol={round(volume_current / volume_average, 2)} atr={round(atr_current / atr_average, 2)}"
+        )
+
+    return None, (
+        f"m1 breakout no setup trend_buy={trend_buy} trend_sell={trend_sell} "
+        f"rsi={round(rsi, 1)} break_hi={breaks_high} break_lo={breaks_low} "
+        f"vol_ok={volume_ok} atr_ok={atr_ok}"
+    )
+
+
 def get_signal(df):
     mode = get_strategy_mode()
 
     if mode == "relaxed":
         return relaxed_signal(df)
+
+    if mode in ("m1_breakout", "breakout", "volume_breakout"):
+        return breakout_m1_signal(df)
 
     if mode == "sniper":
         return sniper_signal(df)
@@ -715,6 +787,20 @@ def get_signal(df):
 
     signal = ai_signal(df, use_news_filter=True, verbose=False)
     return signal, "strict strategy"
+
+
+def get_signal_interval():
+    mode = get_strategy_mode()
+    if mode in ("m1_breakout", "breakout", "volume_breakout"):
+        return "1"
+    return os.getenv("BYBIT_INTERVAL", BYBIT_INTERVAL)
+
+
+def get_signal_limit():
+    mode = get_strategy_mode()
+    if mode in ("m1_breakout", "breakout", "volume_breakout"):
+        return 240
+    return 100
 
 
 def refresh_account():
@@ -938,22 +1024,17 @@ def get_dashboard_reports():
 
 
 def trading_guard_reason():
+    if not is_trade_guard_enabled():
+        return None
+
     ensure_daily_stats()
     ensure_monthly_stats()
 
-    daily_start = daily_stats["start_balance"] or balance
     monthly_start = monthly_stats["start_balance"] or balance
-    daily_total = float(daily_stats["realized_pnl"]) + float(profit)
     monthly_total = float(monthly_stats["realized_pnl"]) + float(profit)
-
-    if daily_start and daily_total <= -(daily_start * get_daily_max_loss_pct() / 100):
-        return f"daily loss limit reached {format_money(daily_total)}"
 
     if monthly_start and monthly_total <= -(monthly_start * get_monthly_max_loss_pct() / 100):
         return f"monthly loss limit reached {format_money(monthly_total)}"
-
-    if daily_stats["losses"] >= get_max_daily_losses():
-        return f"daily loss count reached {daily_stats['losses']}"
 
     if daily_stats["consecutive_losses"] >= get_max_consecutive_losses():
         return f"consecutive losses reached {daily_stats['consecutive_losses']}"
@@ -972,9 +1053,9 @@ def get_guard_status():
     stats_start_at = get_stats_start_at()
     return {
         "active": reason is not None,
-        "reason": reason or "ok",
+        "enabled": is_trade_guard_enabled(),
+        "reason": reason or ("ok" if is_trade_guard_enabled() else "disattivato"),
         "max_risk_pct": get_max_runtime_risk(),
-        "daily_max_loss_pct": get_daily_max_loss_pct(),
         "monthly_max_loss_pct": get_monthly_max_loss_pct(),
         "stats_start_at": stats_start_at.isoformat(timespec="minutes") if stats_start_at else None,
     }
@@ -1411,7 +1492,7 @@ def run_bot():
                 maybe_force_demo_order()
 
                 for symbol in get_symbols():
-                    df = get_data(symbol)
+                    df = get_data(symbol, interval=get_signal_interval(), limit=get_signal_limit())
                     if df is None:
                         continue
 
