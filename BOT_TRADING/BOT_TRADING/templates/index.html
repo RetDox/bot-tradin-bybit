@@ -1015,10 +1015,10 @@ function renderGuard(guard){
 
     if (guard && guard.active) {
         banner.classList.add("active");
-        text.innerText = "Trade bloccati: " + guard.reason;
+        text.innerText = "Trade bloccati: " + guard.reason + (guard.stats_start_at ? " | Conteggio dal " + guard.stats_start_at : "");
     } else {
         banner.classList.remove("active");
-        text.innerText = "Guardiano trade ok";
+        text.innerText = guard && guard.stats_start_at ? "Guardiano ok | Conteggio dal " + guard.stats_start_at : "Guardiano trade ok";
     }
 }
 
