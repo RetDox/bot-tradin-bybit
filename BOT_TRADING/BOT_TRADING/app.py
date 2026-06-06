@@ -97,6 +97,10 @@ def data():
     return jsonify({
         "exchange": os.getenv("EXCHANGE", "mt5").lower(),
         "balance": bot.balance,
+        "wallet_balance": bot.balance,
+        "trading_capital": bot.get_effective_balance() if hasattr(bot, "get_effective_balance") else bot.balance,
+        "account_size": bot.get_account_size() if hasattr(bot, "get_account_size") else None,
+        "fixed_qty": bot.get_fixed_qty() if hasattr(bot, "get_fixed_qty") else None,
         "profit": bot.profit,
         "status": "ON" if bot.running else "OFF",
         "signal": bot.last_signal,
