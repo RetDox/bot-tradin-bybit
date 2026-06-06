@@ -24,13 +24,13 @@ RSI_SELL_MIN = 35
 # =========================
 # RISK
 # =========================
-RISK = 1.0
-MAX_TRADES = 2
+RISK = 0.5
+MAX_TRADES = 1
 DEFAULT_LOT = 0.02
 MAX_LOT = 1.0
 DEVIATION = 20
-ATR_SL_MULTIPLIER = 1.0
-ATR_TP_MULTIPLIER = 2.5
+ATR_SL_MULTIPLIER = 1.2
+ATR_TP_MULTIPLIER = 1.8
 
 # =========================
 # VOLATILITY FILTER
