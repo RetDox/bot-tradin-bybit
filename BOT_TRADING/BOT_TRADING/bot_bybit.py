@@ -209,6 +209,31 @@ def local_now():
         return datetime.now(ZoneInfo("Europe/Rome"))
 
 
+def local_timezone():
+    timezone_name = os.getenv("DAILY_SUMMARY_TZ", "Europe/Rome")
+    try:
+        return ZoneInfo(timezone_name)
+    except Exception:
+        return ZoneInfo("Europe/Rome")
+
+
+def get_stats_start_at():
+    raw = os.getenv("BYBIT_STATS_START_AT") or os.getenv("BYBIT_STATS_START_DATE")
+    if not raw:
+        return None
+
+    try:
+        value = datetime.fromisoformat(raw.strip())
+    except ValueError:
+        log(f"INVALID BYBIT_STATS_START_AT: {raw}")
+        return None
+
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=local_timezone())
+
+    return value
+
+
 def get_daily_summary_time():
     try:
         hour = int(os.getenv("DAILY_SUMMARY_HOUR", "23"))
@@ -796,7 +821,7 @@ def ensure_monthly_stats():
 def closed_pnl_datetime(closed_pnl):
     raw = closed_pnl.get("updatedTime") or closed_pnl.get("createdTime")
     try:
-        return datetime.fromtimestamp(int(raw) / 1000, ZoneInfo(os.getenv("DAILY_SUMMARY_TZ", "Europe/Rome")))
+        return datetime.fromtimestamp(int(raw) / 1000, local_timezone())
     except Exception:
         return local_now()
 
@@ -806,6 +831,10 @@ def record_closed_trade(pnl, closed_at=None):
     ensure_monthly_stats()
 
     closed_at = closed_at or local_now()
+    stats_start_at = get_stats_start_at()
+    if stats_start_at is not None and closed_at < stats_start_at:
+        return
+
     daily_matches = closed_at.date().isoformat() == daily_stats["date"]
     monthly_matches = closed_at.strftime("%Y-%m") == monthly_stats["month"]
 
@@ -940,12 +969,14 @@ def trading_guard_reason():
 
 def get_guard_status():
     reason = trading_guard_reason()
+    stats_start_at = get_stats_start_at()
     return {
         "active": reason is not None,
         "reason": reason or "ok",
         "max_risk_pct": get_max_runtime_risk(),
         "daily_max_loss_pct": get_daily_max_loss_pct(),
         "monthly_max_loss_pct": get_monthly_max_loss_pct(),
+        "stats_start_at": stats_start_at.isoformat(timespec="minutes") if stats_start_at else None,
     }
 
 
