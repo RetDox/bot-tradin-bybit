@@ -168,6 +168,23 @@ def get_max_runtime_risk():
     return get_float_env("BYBIT_MAX_RISK_PCT", 1.0)
 
 
+def get_account_size():
+    return get_float_env("BYBIT_ACCOUNT_SIZE_USDT", BYBIT_ACCOUNT_SIZE_USDT)
+
+
+def get_fixed_qty():
+    return get_float_env("BYBIT_FIXED_QTY", BYBIT_FIXED_QTY)
+
+
+def get_effective_balance():
+    account_size = get_account_size()
+    if account_size <= 0:
+        return balance
+    if balance <= 0:
+        return account_size
+    return min(balance, account_size)
+
+
 def is_trade_guard_enabled():
     return env_bool("BYBIT_TRADE_GUARD", False)
 
@@ -1246,8 +1263,12 @@ def process_telegram_commands():
 
 
 def calculate_qty(symbol, entry, stop_loss):
+    fixed_qty = get_fixed_qty()
+    if fixed_qty > 0:
+        return normalize_qty(symbol, fixed_qty)
+
     risk_pct = max(0.1, min(float(settings["risk"]), get_max_runtime_risk()))
-    risk_amount = balance * (risk_pct / 100)
+    risk_amount = get_effective_balance() * (risk_pct / 100)
     stop_distance = abs(entry - stop_loss)
 
     if stop_distance <= 0:
