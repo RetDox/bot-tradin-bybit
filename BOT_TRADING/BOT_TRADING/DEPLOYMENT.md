@@ -23,6 +23,9 @@ Imposta queste variabili nel progetto Railway:
 EXCHANGE=bybit
 BOT_HOST=0.0.0.0
 BOT_DEBUG=false
+BOT_AUTO_START=true
+BOT_AUTO_RESTART=true
+BOT_WATCHDOG_SECONDS=30
 BYBIT_TESTNET=true
 BYBIT_DEMO=false
 BYBIT_DRY_RUN=true
