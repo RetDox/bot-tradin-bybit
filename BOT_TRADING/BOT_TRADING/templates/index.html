@@ -1167,14 +1167,16 @@ function update(){
         const status = data.status || "OFF";
         const signal = data.signal || "NONE";
         const exchange = data.exchange || "-";
+        const strategy = data.strategy || "-";
         const walletBalance = Number(data.wallet_balance || data.balance || 0);
         const tradingCapital = Number(data.trading_capital || data.balance || 0);
         const accountSize = Number(data.account_size || 0);
+        const fixedQty = Number(data.fixed_qty || 0);
 
         setStatus(status);
-        document.getElementById("subtitle").innerText = exchange.toUpperCase() + " trading console";
+        document.getElementById("subtitle").innerText = exchange.toUpperCase() + " | strategia " + strategy;
         document.getElementById("exchange").innerText = accountSize > 0
-            ? "Operativo: " + money.format(accountSize) + " | Wallet: " + money.format(walletBalance)
+            ? "Operativo: " + money.format(accountSize) + " | Wallet: " + money.format(walletBalance) + (fixedQty > 0 ? " | Qty fissa: " + fixedQty : "")
             : "Exchange: " + exchange.toUpperCase();
         document.getElementById("signal").innerText = signal;
         document.getElementById("signalMain").innerText = signal.split(" ").slice(-1)[0] || "NONE";
