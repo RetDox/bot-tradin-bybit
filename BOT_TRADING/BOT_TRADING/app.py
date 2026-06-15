@@ -96,6 +96,7 @@ def settings():
 def data():
     return jsonify({
         "exchange": os.getenv("EXCHANGE", "mt5").lower(),
+        "strategy": bot.get_strategy_mode() if hasattr(bot, "get_strategy_mode") else None,
         "balance": bot.balance,
         "wallet_balance": bot.balance,
         "trading_capital": bot.get_effective_balance() if hasattr(bot, "get_effective_balance") else bot.balance,
