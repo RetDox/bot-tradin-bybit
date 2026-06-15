@@ -1,5 +1,6 @@
 import threading
 import os
+import time
 
 from flask import Flask, render_template, jsonify, request
 
@@ -12,6 +13,16 @@ from utils import logs
 
 app = Flask(__name__)
 bot_thread = None
+watchdog_thread = None
+bot_thread_lock = threading.Lock()
+manual_stop = False
+
+
+def env_bool(name, default):
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.lower() in ("1", "true", "yes", "on")
 
 
 def clamp_float(value, default, minimum, maximum):
@@ -64,18 +75,61 @@ def home():
     return render_template("index.html")
 
 
-@app.route("/start")
-def start():
+def start_bot_thread(reason="manual"):
     global bot_thread
-    if not bot.running and (bot_thread is None or not bot_thread.is_alive()):
-        bot_thread = threading.Thread(target=bot.run_bot)
+
+    with bot_thread_lock:
+        if bot.running or (bot_thread is not None and bot_thread.is_alive()):
+            return False
+
+        bot_thread = threading.Thread(target=bot.run_bot, name=f"bot-runner-{reason}")
         bot_thread.daemon = True
         bot_thread.start()
+        return True
+
+
+def watchdog_loop():
+    while True:
+        time.sleep(int(os.getenv("BOT_WATCHDOG_SECONDS", "30")))
+
+        if manual_stop:
+            continue
+
+        if not env_bool("BOT_AUTO_RESTART", True):
+            continue
+
+        if not bot.running and (bot_thread is None or not bot_thread.is_alive()):
+            started = start_bot_thread("watchdog")
+            if started:
+                try:
+                    from utils import log
+                    log("BOT WATCHDOG RESTARTED THREAD")
+                except Exception:
+                    pass
+
+
+def start_watchdog():
+    global watchdog_thread
+    if watchdog_thread is not None and watchdog_thread.is_alive():
+        return
+
+    watchdog_thread = threading.Thread(target=watchdog_loop, name="bot-watchdog")
+    watchdog_thread.daemon = True
+    watchdog_thread.start()
+
+
+@app.route("/start")
+def start():
+    global manual_stop
+    manual_stop = False
+    start_bot_thread("manual")
     return "STARTED"
 
 
 @app.route("/stop")
 def stop():
+    global manual_stop
+    manual_stop = True
     bot.stop_bot()
     return "STOPPED"
 
@@ -153,5 +207,9 @@ if __name__ == "__main__":
     host = os.getenv("BOT_HOST", "127.0.0.1")
     port = int(os.getenv("PORT", os.getenv("BOT_PORT", "5000")))
     debug = os.getenv("BOT_DEBUG", "false").lower() == "true"
+
+    start_watchdog()
+    if env_bool("BOT_AUTO_START", True):
+        start_bot_thread("autostart")
 
     app.run(debug=debug, use_reloader=False, host=host, port=port)
