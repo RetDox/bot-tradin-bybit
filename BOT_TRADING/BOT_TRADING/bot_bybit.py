@@ -1,3 +1,4 @@
+import json
 import os
 import time
 from datetime import datetime
@@ -34,6 +35,7 @@ instrument_cache = {}
 forced_test_done = False
 order_cooldowns = {}
 last_trade_bar = {}
+last_trade_context = {}
 tracked_positions = {}
 notified_closed_keys = set()
 recorded_closed_keys = set()
@@ -174,6 +176,18 @@ def get_account_size():
 
 def get_fixed_qty():
     return get_float_env("BYBIT_FIXED_QTY", BYBIT_FIXED_QTY)
+
+
+def get_ghost_threshold():
+    return get_float_env("BYBIT_GHOST_THRESHOLD", 85)
+
+
+def get_ghost_observe_threshold():
+    return get_float_env("BYBIT_GHOST_OBSERVE_THRESHOLD", 70)
+
+
+def get_journal_path():
+    return os.getenv("BYBIT_TRADE_JOURNAL", "trade_journal.jsonl")
 
 
 def get_effective_balance():
@@ -787,11 +801,270 @@ def breakout_m1_signal(df):
     )
 
 
+def enrich_market_data(df):
+    data = df.copy()
+    data["ema20"] = data["close"].ewm(span=20).mean()
+    data["ema50"] = data["close"].ewm(span=50).mean()
+    data["ema200"] = data["close"].ewm(span=200).mean()
+    data["rsi"] = calculate_rsi(data["close"], RSI_PERIOD)
+
+    prev_close = data["close"].shift(1)
+    data["tr"] = pd.concat(
+        [
+            data["high"] - data["low"],
+            (data["high"] - prev_close).abs(),
+            (data["low"] - prev_close).abs(),
+        ],
+        axis=1,
+    ).max(axis=1)
+    data["atr"] = data["tr"].rolling(14).mean()
+    data["atr_avg"] = data["atr"].rolling(50).mean()
+    data["volume_avg"] = data["volume"].rolling(20).mean()
+    return data
+
+
+def trend_side(data):
+    if data is None or len(data) < 210:
+        return None
+
+    enriched = enrich_market_data(data)
+    last = enriched.iloc[-1]
+    prev = enriched.iloc[-8]
+    slope = last["ema50"] - prev["ema50"]
+
+    if last["ema50"] > last["ema200"] and slope > 0 and last["close"] > last["ema50"]:
+        return "BUY"
+
+    if last["ema50"] < last["ema200"] and slope < 0 and last["close"] < last["ema50"]:
+        return "SELL"
+
+    return None
+
+
+def detect_market_state(m1, m5, m15, h1):
+    data = enrich_market_data(m1)
+    last = data.iloc[-1]
+    atr = last["atr"]
+    atr_avg = last["atr_avg"]
+    adx = calculate_adx(data)
+
+    if pd.isna(atr) or pd.isna(atr_avg) or atr <= 0 or atr_avg <= 0:
+        return "unknown"
+
+    if atr < atr_avg * 0.65:
+        return "low_volatility"
+
+    if atr > atr_avg * 2.2:
+        return "high_volatility"
+
+    m15_side = trend_side(m15)
+    h1_side = trend_side(h1)
+    if m15_side == "BUY" and h1_side == "BUY":
+        return "trend_up"
+    if m15_side == "SELL" and h1_side == "SELL":
+        return "trend_down"
+
+    if adx is not None and adx < 18:
+        return "range"
+
+    return "mixed"
+
+
+def liquidity_sweep(data, side, lookback=12):
+    recent_high = data["high"].iloc[-lookback - 1:-1].max()
+    recent_low = data["low"].iloc[-lookback - 1:-1].min()
+    last = data.iloc[-1]
+
+    if side == "BUY":
+        return last["low"] < recent_low and last["close"] > recent_low
+
+    return last["high"] > recent_high and last["close"] < recent_high
+
+
+def build_ghost_score(side, state, m1, m5, m15, h1):
+    data = enrich_market_data(m1)
+    last = data.iloc[-1]
+    prev = data.iloc[-2]
+    score = 0
+    reasons = []
+
+    m5_side = trend_side(m5)
+    m15_side = trend_side(m15)
+    h1_side = trend_side(h1)
+    recent_high = data["high"].iloc[-11:-1].max()
+    recent_low = data["low"].iloc[-11:-1].min()
+
+    volume_ratio = last["volume"] / last["volume_avg"] if last["volume_avg"] > 0 else 0
+    atr_ratio = last["atr"] / last["atr_avg"] if last["atr_avg"] > 0 else 0
+    rsi = last["rsi"]
+
+    if state == "range":
+        range_high = data["high"].iloc[-41:-1].max()
+        range_low = data["low"].iloc[-41:-1].min()
+        atr = last["atr"]
+
+        if side == "BUY":
+            near_level = last["low"] <= range_low + (atr * 0.55) and last["close"] > last["open"]
+            rsi_ok = 34 <= rsi <= 48
+        else:
+            near_level = last["high"] >= range_high - (atr * 0.55) and last["close"] < last["open"]
+            rsi_ok = 52 <= rsi <= 66
+
+        if near_level:
+            score += 30
+            reasons.append("range_level_reaction")
+
+        if rsi_ok:
+            score += 20
+            reasons.append("range_rsi_reversal")
+
+        if liquidity_sweep(data, side):
+            score += 25
+            reasons.append("range_liquidity_sweep")
+
+        if 0.75 <= atr_ratio <= 1.6:
+            score += 15
+            reasons.append("range_atr_normal")
+
+        if volume_ratio > 0.8:
+            score += 10
+            reasons.append("range_volume_ok")
+
+        return max(0, min(score, 100)), reasons, {
+            "state": state,
+            "side": side,
+            "rsi": round(float(rsi), 2) if not pd.isna(rsi) else None,
+            "atr_ratio": round(float(atr_ratio), 2),
+            "volume_ratio": round(float(volume_ratio), 2),
+            "m5_side": m5_side,
+            "m15_side": m15_side,
+            "h1_side": h1_side,
+        }
+
+    if m15_side == side and h1_side == side:
+        score += 20
+        reasons.append("trend_higher_tf")
+
+    if m5_side == side:
+        score += 10
+        reasons.append("trend_m5")
+
+    if volume_ratio > 1.15:
+        score += 15
+        reasons.append("volume_strong")
+
+    if side == "BUY":
+        breakout = last["close"] > recent_high
+        retest = prev["low"] <= prev["ema20"] and last["close"] > last["ema20"]
+        rsi_ok = 52 <= rsi <= 68
+    else:
+        breakout = last["close"] < recent_low
+        retest = prev["high"] >= prev["ema20"] and last["close"] < last["ema20"]
+        rsi_ok = 32 <= rsi <= 48
+
+    if breakout:
+        score += 20
+        reasons.append("breakout")
+
+    if retest:
+        score += 20
+        reasons.append("retest")
+
+    if rsi_ok:
+        score += 10
+        reasons.append("rsi_ok")
+
+    if liquidity_sweep(data, side):
+        score += 15
+        reasons.append("liquidity_sweep")
+
+    if state == "range":
+        score -= 15
+        reasons.append("range_penalty")
+
+    if atr_ratio < 0.75:
+        score -= 20
+        reasons.append("low_atr_penalty")
+
+    if atr_ratio > 2.0:
+        score -= 30
+        reasons.append("atr_spike_penalty")
+
+    return max(0, min(score, 100)), reasons, {
+        "state": state,
+        "side": side,
+        "rsi": round(float(rsi), 2) if not pd.isna(rsi) else None,
+        "atr_ratio": round(float(atr_ratio), 2),
+        "volume_ratio": round(float(volume_ratio), 2),
+        "m5_side": m5_side,
+        "m15_side": m15_side,
+        "h1_side": h1_side,
+    }
+
+
+def ghost_signal(df):
+    if df is None or len(df) < 220:
+        return None, "ghost not enough m1 data"
+
+    symbol = df["symbol"].iloc[-1]
+    m1 = df
+    m5 = get_data(symbol, interval="5", limit=240)
+    m15 = get_data(symbol, interval="15", limit=260)
+    h1 = get_data(symbol, interval="60", limit=260)
+
+    if m5 is None or m15 is None or h1 is None:
+        return None, "ghost missing multi-timeframe data"
+
+    state = detect_market_state(m1, m5, m15, h1)
+    if state in ("unknown", "low_volatility", "high_volatility", "mixed"):
+        return None, f"ghost observe state={state}"
+
+    sides = []
+    if state == "trend_up":
+        sides = ["BUY"]
+    elif state == "trend_down":
+        sides = ["SELL"]
+    elif state == "range":
+        sides = ["BUY", "SELL"]
+
+    best = None
+    for side in sides:
+        score, reasons, context = build_ghost_score(side, state, m1, m5, m15, h1)
+        candidate = (score, side, reasons, context)
+        if best is None or score > best[0]:
+            best = candidate
+
+    if best is None:
+        return None, f"ghost no side state={state}"
+
+    score, side, reasons, context = best
+    threshold = get_ghost_threshold()
+    observe_threshold = get_ghost_observe_threshold()
+    last_trade_context[symbol] = {
+        "strategy": "ghost",
+        "score": score,
+        "reasons": reasons,
+        **context,
+    }
+
+    reason_text = ",".join(reasons) if reasons else "no_reasons"
+    if score >= threshold:
+        return side, f"ghost score={score} state={state} reasons={reason_text}"
+
+    if score >= observe_threshold:
+        return None, f"ghost observe score={score} state={state} reasons={reason_text}"
+
+    return None, f"ghost no trade score={score} state={state} reasons={reason_text}"
+
+
 def get_signal(df):
     mode = get_strategy_mode()
 
     if mode == "relaxed":
         return relaxed_signal(df)
+
+    if mode == "ghost":
+        return ghost_signal(df)
 
     if mode in ("m1_breakout", "breakout", "volume_breakout"):
         return breakout_m1_signal(df)
@@ -808,13 +1081,15 @@ def get_signal(df):
 
 def get_signal_interval():
     mode = get_strategy_mode()
-    if mode in ("m1_breakout", "breakout", "volume_breakout"):
+    if mode in ("ghost", "m1_breakout", "breakout", "volume_breakout"):
         return "1"
     return os.getenv("BYBIT_INTERVAL", BYBIT_INTERVAL)
 
 
 def get_signal_limit():
     mode = get_strategy_mode()
+    if mode == "ghost":
+        return 260
     if mode in ("m1_breakout", "breakout", "volume_breakout"):
         return 240
     return 100
@@ -1099,6 +1374,20 @@ def notify_position_closed(symbol, previous_position):
     result = "PROFITTO" if pnl > 0 else "PERDITA" if pnl < 0 else "PAREGGIO"
 
     record_closed_pnl(symbol, closed_pnl)
+    append_trade_journal(
+        {
+            "event": "close",
+            "symbol": symbol,
+            "side": side,
+            "qty": qty,
+            "entry": entry,
+            "exit": exit_price,
+            "result": result,
+            "pnl": pnl,
+            "closed_at": closed_pnl_datetime(closed_pnl).isoformat(timespec="seconds"),
+            "order_id": closed_pnl.get("orderId"),
+        }
+    )
     notify(
         "BOT PRO - posizione chiusa\n"
         f"Exchange: Bybit {'Demo' if is_demo_mode() else 'Live'}\n"
@@ -1262,6 +1551,18 @@ def process_telegram_commands():
             )
 
 
+def append_trade_journal(event):
+    try:
+        payload = {
+            "time": local_now().isoformat(timespec="seconds"),
+            **event,
+        }
+        with open(get_journal_path(), "a", encoding="utf-8") as journal:
+            journal.write(json.dumps(payload, ensure_ascii=True) + "\n")
+    except Exception as exc:
+        log(f"JOURNAL ERROR: {type(exc).__name__}: {exc}")
+
+
 def calculate_qty(symbol, entry, stop_loss):
     fixed_qty = get_fixed_qty()
     if fixed_qty > 0:
@@ -1360,6 +1661,19 @@ def open_trade(df, signal):
     if api_ok(response):
         last_trade_bar[symbol] = bar_time
         log(f"{symbol} {signal} OPENED qty={qty} sl={sl_text} tp={tp_text}")
+        append_trade_journal(
+            {
+                "event": "open",
+                "symbol": symbol,
+                "side": signal,
+                "qty": qty,
+                "entry": last_price,
+                "stop_loss": sl_text,
+                "take_profit": tp_text,
+                "reason": last_trade_context.get(symbol, {}),
+                "order_id": response.get("result", {}).get("orderId"),
+            }
+        )
         notify(
             "BOT PRO - posizione aperta\n"
             f"Exchange: Bybit {'Demo' if is_demo_mode() else 'Live'}\n"
