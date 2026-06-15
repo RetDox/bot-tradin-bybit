@@ -26,17 +26,79 @@ BOT_DEBUG=false
 BYBIT_TESTNET=true
 BYBIT_DEMO=false
 BYBIT_DRY_RUN=true
+BYBIT_FORCE_DEMO_ORDER=false
 BYBIT_API_KEY=...
 BYBIT_API_SECRET=...
 BYBIT_CATEGORY=linear
-BYBIT_SYMBOLS=XAUUSDT
+BYBIT_SYMBOLS=XAUUSDT,BTCUSDT
+BYBIT_ACCOUNT_SIZE_USDT=200
+BYBIT_FIXED_QTY=0.30
 BYBIT_INTERVAL=5
 BYBIT_QUOTE_COIN=USDT
+BYBIT_STRATEGY_MODE=ghost
+BYBIT_GHOST_THRESHOLD=85
+BYBIT_GHOST_OBSERVE_THRESHOLD=70
+BYBIT_CONFIRM_INTERVAL=15
+BYBIT_MIN_ADX=18
+BYBIT_SL_ATR=1.2
+BYBIT_TP_ATR=2.2
+BYBIT_MAX_QTY=10
+BYBIT_ORDER_COOLDOWN_SECONDS=300
+BYBIT_BE_TRIGGER_ATR=0.6
+BYBIT_BE_LOCK_ATR=0.1
 ```
 
 Parti cosi': `BYBIT_TESTNET=true` e `BYBIT_DRY_RUN=true`.
 
+`BYBIT_ACCOUNT_SIZE_USDT=200` fa calcolare le size come se il conto fosse da 200 USDT anche quando il wallet demo mostra un saldo molto piu' alto.
+
+`BYBIT_FIXED_QTY=0.30` forza ogni nuova posizione a usare quantita' 0.30. Se vuoi tornare al calcolo automatico basato su rischio e stop loss, imposta `BYBIT_FIXED_QTY=0`.
+
 Per lavorare principalmente sull'oro, usa `BYBIT_SYMBOLS=XAUUSDT` se il contratto e' disponibile sul tuo account Bybit. Se Bybit non accetta quel simbolo nella tua area/account, le alternative oro piu comuni sono `XAUTUSDT` o `PAXGUSDT`.
+
+Per la modalita' GhostMode adattiva usa:
+
+```text
+BYBIT_STRATEGY_MODE=ghost
+BYBIT_GHOST_THRESHOLD=85
+BYBIT_GHOST_OBSERVE_THRESHOLD=70
+```
+
+GhostMode legge M1/M5/M15/H1, identifica stato mercato, calcola confidence score e salva ogni entrata/uscita in `trade_journal.jsonl`.
+
+Per una logica piu' selettiva classica usa:
+
+```text
+BYBIT_STRATEGY_MODE=quality
+BYBIT_CONFIRM_INTERVAL=15
+BYBIT_MIN_ADX=18
+BYBIT_SL_ATR=1.2
+BYBIT_TP_ATR=2.2
+```
+
+La modalita' `strict` usa tutti i filtri originali. La modalita' `relaxed` usa trend EMA, momentum e RSI. La modalita' `quality` usa conferma multi-timeframe, ADX, volatilita' e pullback breakout: fa meno trade, ma cerca setup migliori.
+
+### Notifiche Telegram
+
+Per ricevere un messaggio sul telefono quando il bot apre una posizione, crea un bot con `@BotFather`, scrivigli almeno un messaggio da Telegram, poi imposta su Railway:
+
+```text
+TELEGRAM_BOT_TOKEN=...
+TELEGRAM_CHAT_ID=...
+DAILY_SUMMARY_TZ=Europe/Rome
+DAILY_SUMMARY_HOUR=23
+DAILY_SUMMARY_MINUTE=59
+```
+
+Le notifiche partono quando un ordine viene confermato come aperto, quando una posizione viene rilevata come chiusa e all'orario del riepilogo giornaliero.
+
+Puoi richiedere il report quando vuoi scrivendo al bot Telegram:
+
+```text
+/report
+```
+
+Il blocco automatico dei trade dopo perdite o drawdown e' disattivato. Il report continua a mostrare PnL, trade chiusi e perdite consecutive.
 
 Quando hai verificato log, segnali, sizing e dashboard:
 
@@ -56,6 +118,19 @@ BYBIT_DRY_RUN=false
 ```
 
 Il dominio usato dalla libreria diventa `api-demo.bybit.com`. Se lasci `BYBIT_DRY_RUN=true`, il bot non aprira' posizioni nemmeno sul demo.
+
+Per verificare la pipeline ordini sul demo puoi attivare temporaneamente:
+
+```text
+BYBIT_FORCE_DEMO_ORDER=true
+BYBIT_FORCE_SIDE=BUY
+```
+
+Il bot provera' ad aprire un solo ordine demo sul primo simbolo configurato. Dopo il test rimetti subito:
+
+```text
+BYBIT_FORCE_DEMO_ORDER=false
+```
 
 Prima di usare mainnet crea una API key Bybit con soli permessi necessari al trading. Non abilitare withdrawal. Se Bybit ti permette IP whitelist e Railway ti da un outbound IP stabile tramite networking adatto al tuo piano/setup, usala.
 
